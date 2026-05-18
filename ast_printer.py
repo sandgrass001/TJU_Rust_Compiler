@@ -5,7 +5,6 @@ from ast_nodes import *
 
 
 class ASTPrinter:
-    """打印适配 `ast_nodes.py` 的 AST 文本表示（不依赖节点实现 accept）。"""
     def __init__(self):
         self.indent_level = 0
         self._output = io.StringIO()

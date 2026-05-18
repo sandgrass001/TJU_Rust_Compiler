@@ -85,22 +85,12 @@ TOKEN_TYPE_LABELS = {
     LexerTokenType.ILLEGAL: "非法字符",
 }
 
-LR1_DATA = {
-    'states': [],
-    'action': {},
-    'goto': {},
-    'productions': [],
-}
-
-REDUCE_PROCESS = []
-
-
 class RustLexSyntaxVisualizer:
     """类Rust语言词法语法分析可视化展示器 - 浅色美化版"""
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🦀 Rust词法语法分析器")
+        self.root.title("Rust词法语法分析器")
         self.root.geometry("1600x1000")
         self.root.configure(bg='#f0f4f8')
         self.root.minsize(1400, 800)
@@ -146,13 +136,16 @@ class RustLexSyntaxVisualizer:
         self.ast_photo_image = None
         self.ast_zoom = 1.0
         self.ast_fit_zoom = 1.0
+        self.ast_auto_fit = True
+        self.ast_fit_after_id = None
 
         self.AST_NODE_X_GAP = 24
         self.AST_NODE_Y_GAP = 100
 
         self.setup_ui()
+        
         if DEFAULT_TEST_FILE:
-            self.run_analysis()
+            self.root.after_idle(self.run_analysis)
         
     def configure_ttk_style(self):
         """配置ttk主题样式 - 浅色主题"""
@@ -236,7 +229,6 @@ class RustLexSyntaxVisualizer:
         
         self.create_result_panel(content_frame)
         self.create_status_bar(main_container)
-        self.run_analysis()
         
     def create_title_bar(self, parent):
         """创建标题栏 - 现代化浅色设计"""
@@ -316,6 +308,8 @@ class RustLexSyntaxVisualizer:
         )
         self.code_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.code_text.yview)
+        self.code_text.bind('<KeyRelease-space>', self.on_code_space_key_release)
+        self.code_text.bind('<KeyRelease-Return>', self.on_code_return_key_release)
         
         # 添加水平滚动条
         h_scrollbar = ttk.Scrollbar(code_frame, orient=tk.HORIZONTAL, command=self.code_text.xview, style='Horizontal.TScrollbar')
@@ -386,8 +380,9 @@ class RustLexSyntaxVisualizer:
                 self.used_tags.add("attribute")
             
             # 高亮关键字
-            keywords = ['struct', 'impl', 'fn', 'let', 'match', 'Some', 'None', 
-                        'Self', 'self', 'return', 'if', 'else', 'loop', 'while', 'for', 'in']
+            keywords = ['struct', 'impl', 'fn', 'let', 'mut', 'match', 'Some', 'None',
+                        'Self', 'self', 'return', 'if', 'else', 'loop', 'while', 'for',
+                        'in', 'break', 'continue']
             for kw in keywords:
                 self.highlight_pattern_in_line(line_start, line_end, rf'\b{kw}\b', "keyword")
             
@@ -417,6 +412,68 @@ class RustLexSyntaxVisualizer:
         # 提高使用的标签优先级
         for tag in self.used_tags:
             self.code_text.tag_raise(tag)
+
+    def configure_code_syntax_tags(self):
+        self.code_text.tag_config("keyword", foreground=self.colors['keyword'])
+        self.code_text.tag_config("type", foreground=self.colors['type'])
+        self.code_text.tag_config("macro", foreground=self.colors['macro'])
+        self.code_text.tag_config("string", foreground=self.colors['string'])
+        self.code_text.tag_config("attribute", foreground=self.colors['attribute'])
+        self.code_text.tag_config("comment", foreground=self.colors['comment'])
+        self.code_text.tag_config("number", foreground=self.colors['warning'])
+
+    def highlight_finished_token_before_index(self, index):
+        self.configure_code_syntax_tags()
+        target_index = self.code_text.index(index)
+        line_no, col = map(int, target_index.split('.'))
+        line_prefix = self.code_text.get(f"{line_no}.0", target_index)
+        match = re.search(r'([A-Za-z_][A-Za-z0-9_]*!?|\d+)\s*$', line_prefix)
+        if not match:
+            return
+
+        token = match.group(1)
+        token_start_col = match.start(1)
+        token_end_col = match.end(1)
+        token_start = f"{line_no}.{token_start_col}"
+        token_end = f"{line_no}.{token_end_col}"
+        line_before_token = self.code_text.get(f"{line_no}.0", token_start)
+
+        for tag in ("keyword", "type", "macro", "number"):
+            self.code_text.tag_remove(tag, token_start, token_end)
+
+        # Skip tokens that are already inside a line comment or a simple string literal.
+        if '//' in line_before_token or line_before_token.count('"') % 2 == 1:
+            return None
+
+        keywords = {
+            'struct', 'impl', 'fn', 'let', 'mut', 'match', 'Some', 'None',
+            'Self', 'self', 'return', 'if', 'else', 'loop', 'while', 'for',
+            'in', 'break', 'continue'
+        }
+        types = {'String', 'Option', 'Person', 'u32', 'i32', 'Self', 'Result', 'Vec', 'Box'}
+
+        tag = None
+        if token.endswith('!') and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*!', token):
+            tag = "macro"
+        elif token in keywords:
+            tag = "keyword"
+        elif token in types:
+            tag = "type"
+        elif token.isdigit():
+            tag = "number"
+
+        if tag:
+            self.code_text.tag_add(tag, token_start, token_end)
+            self.code_text.tag_raise(tag)
+
+    def on_code_space_key_release(self, event=None):
+        self.highlight_finished_token_before_index('insert')
+        return None
+
+    def on_code_return_key_release(self, event=None):
+        self.highlight_finished_token_before_index('insert -1c')
+
+        return None
 
     def highlight_pattern_in_line(self, start_pos, end_pos, pattern, tag):
         """在单行范围内查找并高亮"""
@@ -459,8 +516,6 @@ class RustLexSyntaxVisualizer:
         self.create_lex_tab()
         self.create_syntax_tab()
         self.create_tree_tab()
-        self.create_lr_tab()
-        self.create_reduce_tab()
             
     def create_lex_tab(self):
         """创建词法分析结果标签页 - 浅色版"""
@@ -600,10 +655,10 @@ class RustLexSyntaxVisualizer:
         toolbar.pack(fill=tk.X, padx=12, pady=(12, 0))
         toolbar.pack_propagate(False)
 
-        ttk.Button(toolbar, text="-", command=lambda: self.zoom_ast(0.8)).pack(side=tk.LEFT, padx=(8, 4), pady=6)
-        ttk.Button(toolbar, text="+", command=lambda: self.zoom_ast(1.25)).pack(side=tk.LEFT, padx=4, pady=6)
-        ttk.Button(toolbar, text="fit", command=self.fit_ast_to_canvas).pack(side=tk.LEFT, padx=4, pady=6)
-        ttk.Button(toolbar, text="100%", command=lambda: self.set_ast_zoom(1.0)).pack(side=tk.LEFT, padx=4, pady=6)
+        ttk.Button(toolbar, text="fit", command=self.fit_ast_to_canvas).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(toolbar, text="-", command=lambda: self.zoom_ast(0.8)).pack(side=tk.LEFT, padx=(8, 4), pady=4)
+        ttk.Button(toolbar, text="+", command=lambda: self.zoom_ast(1.25)).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(toolbar, text="100%", command=lambda: self.set_ast_zoom(1.0)).pack(side=tk.LEFT, padx=4, pady=4)
 
         self.ast_zoom_label = tk.Label(
             toolbar,
@@ -627,6 +682,52 @@ class RustLexSyntaxVisualizer:
         scroll_x = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree_canvas.xview, style='Horizontal.TScrollbar')
         scroll_x.pack(fill=tk.X, padx=12)
         self.tree_canvas.configure(xscrollcommand=scroll_x.set)
+
+        ast_text_frame = tk.Frame(self.tree_frame, bg=self.colors['surface2'], bd=1, relief=tk.FLAT, height=220)
+        ast_text_frame.pack(fill=tk.BOTH, padx=12, pady=(8, 12))
+        ast_text_frame.pack_propagate(False)
+
+        ast_text_header = tk.Frame(ast_text_frame, bg=self.colors['surface2'], height=32)
+        ast_text_header.pack(fill=tk.X)
+        ast_text_header.pack_propagate(False)
+
+        ast_text_label = tk.Label(
+            ast_text_header,
+            text="AST 文本树",
+            font=('Segoe UI', 10, 'bold'),
+            bg=self.colors['surface2'],
+            fg=self.colors['fg']
+        )
+        ast_text_label.pack(side=tk.LEFT, padx=12, pady=6)
+
+        ast_text_body = tk.Frame(ast_text_frame, bg=self.colors['bg_light'])
+        ast_text_body.pack(fill=tk.BOTH, expand=True)
+
+        self.ast_text_view = tk.Text(
+            ast_text_body,
+            font=('Consolas', 10),
+            bg=self.colors['bg_light'],
+            fg=self.colors['fg'],
+            wrap=tk.NONE,
+            padx=12,
+            pady=10,
+            bd=0,
+            relief=tk.FLAT,
+            highlightthickness=0,
+            selectbackground=self.colors['accent_light'],
+            selectforeground=self.colors['accent']
+        )
+        self.ast_text_view.grid(row=0, column=0, sticky='nsew')
+
+        ast_text_scroll_y = ttk.Scrollbar(ast_text_body, orient=tk.VERTICAL, command=self.ast_text_view.yview, style='Vertical.TScrollbar')
+        ast_text_scroll_y.grid(row=0, column=1, sticky='ns')
+        ast_text_scroll_x = ttk.Scrollbar(ast_text_body, orient=tk.HORIZONTAL, command=self.ast_text_view.xview, style='Horizontal.TScrollbar')
+        ast_text_scroll_x.grid(row=1, column=0, sticky='ew')
+        self.ast_text_view.configure(yscrollcommand=ast_text_scroll_y.set, xscrollcommand=ast_text_scroll_x.set)
+
+        ast_text_body.grid_rowconfigure(0, weight=1)
+        ast_text_body.grid_columnconfigure(0, weight=1)
+        self.ast_text_view.config(state=tk.DISABLED)
         
         self.tree_canvas.bind('<Configure>', self.on_ast_canvas_configure)
         self.tree_canvas.bind('<Control-MouseWheel>', self.on_ast_mousewheel)
@@ -725,6 +826,8 @@ class RustLexSyntaxVisualizer:
 
     def on_ast_canvas_configure(self, event=None):
         self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox('all'))
+        if self.ast_auto_fit and self.ast_image_bytes:
+            self.schedule_ast_fit()
 
     def on_ast_mousewheel(self, event):
         if event.delta > 0:
@@ -748,32 +851,52 @@ class RustLexSyntaxVisualizer:
         fit_zoom = min(canvas_width / source_width, canvas_height / source_height)
         return min(1.0, max(0.05, fit_zoom))
 
+    def schedule_ast_fit(self):
+        if not self.ast_image_bytes or self.ast_fit_after_id is not None:
+            return
+        self.ast_fit_after_id = self.root.after_idle(self.fit_ast_to_canvas_when_ready)
+
+    def fit_ast_to_canvas_when_ready(self):
+        self.ast_fit_after_id = None
+        if not self.ast_image_bytes:
+            return
+        self.tree_canvas.update_idletasks()
+        if self.tree_canvas.winfo_width() <= 1 or self.tree_canvas.winfo_height() <= 1:
+            self.ast_fit_after_id = self.root.after(50, self.fit_ast_to_canvas_when_ready)
+            return
+        self.fit_ast_to_canvas()
+
     def fit_ast_to_canvas(self):
         if not self.ast_image_bytes:
             return
+        self.ast_auto_fit = True
         self.ast_fit_zoom = self.calculate_ast_fit_zoom()
-        self.set_ast_zoom(self.ast_fit_zoom)
+        self.set_ast_zoom(self.ast_fit_zoom, keep_auto_fit=True)
 
     def zoom_ast(self, factor):
         if not self.ast_image_bytes:
             return
+        self.ast_auto_fit = False
         self.set_ast_zoom(self.ast_zoom * factor)
 
-    def set_ast_zoom(self, zoom):
+    def set_ast_zoom(self, zoom, keep_auto_fit=False):
         if not self.ast_image_bytes:
             return
+        if not keep_auto_fit:
+            self.ast_auto_fit = False
         self.ast_zoom = max(0.05, min(6.0, zoom))
         self.render_ast_image()
 
     def load_ast_image(self, image_bytes):
         self.ast_image_bytes = image_bytes
         self.ast_source_image = None
+        self.ast_auto_fit = True
         if Image is not None:
             self.ast_source_image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
         else:
             image_data = base64.b64encode(image_bytes).decode('ascii')
             self.ast_photo_image = tk.PhotoImage(data=image_data)
-        self.fit_ast_to_canvas()
+        self.schedule_ast_fit()
 
     def render_ast_image(self):
         self.tree_canvas.delete('all')
@@ -805,6 +928,20 @@ class RustLexSyntaxVisualizer:
         )
         if hasattr(self, 'ast_zoom_label'):
             self.ast_zoom_label.config(text=f"缩放: {int(self.ast_zoom * 100)}%")
+
+    def update_ast_text_view(self):
+        if not hasattr(self, 'ast_text_view'):
+            return
+
+        self.ast_text_view.config(state=tk.NORMAL)
+        self.ast_text_view.delete(1.0, tk.END)
+        if self.ast_text:
+            self.ast_text_view.insert(1.0, self.ast_text.rstrip())
+        elif self.parse_error:
+            self.ast_text_view.insert(1.0, f"语法分析失败，无法生成 AST 文本树:\n{self.parse_error}")
+        else:
+            self.ast_text_view.insert(1.0, "暂无 AST 文本树，请先运行分析。")
+        self.ast_text_view.config(state=tk.DISABLED)
 
     def update_lex_tree(self):
         """更新词法分析结果视图"""
@@ -847,6 +984,7 @@ class RustLexSyntaxVisualizer:
         self.ast_image_bytes = None
         self.ast_source_image = None
         self.ast_photo_image = None
+        self.update_ast_text_view()
 
         if self.ast is None:
             self.tree_canvas.create_text(
@@ -898,107 +1036,6 @@ class RustLexSyntaxVisualizer:
         self.update_ast_tree()
         self.code_text.config(state=tk.NORMAL)
 
-    def create_lr_tab(self):
-        """创建LR(1)分析表标签页 - 浅色版"""
-        self.lr_frame = tk.Frame(self.notebook, bg=self.colors['bg'])
-        self.notebook.add(self.lr_frame, text="📊 LR(1)分析表")
-        
-        lr_frame_inner = tk.Frame(self.lr_frame, bg=self.colors['bg'])
-        lr_frame_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
-        
-        self.lr_text = tk.Text(
-            lr_frame_inner, font=('Consolas', 10),
-            bg=self.colors['bg_light'], fg=self.colors['fg'],
-            wrap=tk.NONE, padx=12, pady=12,
-            selectbackground=self.colors['accent_light'],
-            selectforeground=self.colors['accent']
-        )
-        
-        scroll_y = ttk.Scrollbar(lr_frame_inner, orient=tk.VERTICAL, command=self.lr_text.yview, style='Vertical.TScrollbar')
-        scroll_x = ttk.Scrollbar(lr_frame_inner, orient=tk.HORIZONTAL, command=self.lr_text.xview, style='Horizontal.TScrollbar')
-        self.lr_text.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-        
-        self.lr_text.pack(fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        self.generate_lr_table_text()
-        self.lr_text.config(state=tk.DISABLED)
-        
-    def generate_lr_table_text(self):
-        """生成LR(1)分析表文本 - 说明当前语法分析类型"""
-        table_text = []
-        table_text.append("═" * 100)
-        table_text.append("🦀 语法分析说明")
-        table_text.append("═" * 100)
-        table_text.append("")
-        table_text.append("本演示使用当前项目中的词法分析器和递归下降解析器，而非完整的 LR(1) 分析表。")
-        table_text.append("")
-        table_text.append("当前支持语法子集说明:")
-        table_text.append("─" * 100)
-        table_text.append("  • 函数声明 fn name(...) -> type")
-        table_text.append("  • let 可变绑定与类型注释")
-        table_text.append("  • if 条件语句")
-        table_text.append("  • return 语句")
-        table_text.append("  • 赋值语句与表达式语句")
-        table_text.append("  • 二元运算、函数调用与比较表达式")
-        table_text.append("")
-        table_text.append("该标签页保留为语法分析说明区，帮助理解项目当前解析能力。")
-        table_text.append("")
-        table_text.append("提示: 如果需要，可以在本项目后续扩展中补充完整的 LR(1) 分析表。")
-        table_text.append("")
-        table_text.append("═" * 100)
-        self.lr_text.insert(1.0, '\n'.join(table_text))
-        
-    def create_reduce_tab(self):
-        """创建规约过程标签页 - 浅色版"""
-        self.reduce_frame = tk.Frame(self.notebook, bg=self.colors['bg'])
-        self.notebook.add(self.reduce_frame, text="⚙️ 规约过程")
-        
-        reduce_frame_inner = tk.Frame(self.reduce_frame, bg=self.colors['bg'])
-        reduce_frame_inner.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
-        
-        columns = ('步骤', '状态栈', '符号栈', '输入', '动作')
-        self.reduce_tree = ttk.Treeview(reduce_frame_inner, columns=columns, show='headings', height=12, style='Treeview')
-        
-        for col in columns:
-            self.reduce_tree.heading(col, text=col)
-            width = 70 if col == '步骤' else (280 if col in ['状态栈', '符号栈'] else 200)
-            self.reduce_tree.column(col, width=width)
-            
-        scroll_y = ttk.Scrollbar(reduce_frame_inner, orient=tk.VERTICAL, command=self.reduce_tree.yview, style='Vertical.TScrollbar')
-        scroll_x = ttk.Scrollbar(reduce_frame_inner, orient=tk.HORIZONTAL, command=self.reduce_tree.xview, style='Horizontal.TScrollbar')
-        self.reduce_tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-        
-        self.reduce_tree.grid(row=0, column=0, sticky='nsew')
-        scroll_y.grid(row=0, column=1, sticky='ns')
-        scroll_x.grid(row=1, column=0, sticky='ew')
-        
-        reduce_frame_inner.grid_rowconfigure(0, weight=1)
-        reduce_frame_inner.grid_columnconfigure(0, weight=1)
-        
-        for i, step in enumerate(REDUCE_PROCESS):
-            item_id = self.reduce_tree.insert('', tk.END, values=(
-                step['step'], step['state_stack'], step['symbol_stack'], 
-                step['input'], step['action']
-            ))
-            if i % 2 == 0:
-                self.reduce_tree.tag_configure('oddrow', background=self.colors['surface2'])
-                self.reduce_tree.item(item_id, tags=('oddrow',))
-            
-        # 信息栏
-        info_frame = tk.Frame(self.reduce_frame, bg=self.colors['surface2'], height=40)
-        info_frame.pack(fill=tk.X, side=tk.BOTTOM)
-        info_frame.pack_propagate(False)
-        
-        info_label = tk.Label(
-            info_frame,
-            text="💡 移进-规约分析过程 | LR(1) 语法分析器逐步构建 AST",
-            font=('Segoe UI', 10),
-            bg=self.colors['surface2'], fg=self.colors['warning']
-        )
-        info_label.pack(padx=16, pady=10, anchor='w')
-        
     def show_lex_tab(self):
         self.notebook.select(self.lex_frame)
         
@@ -1007,12 +1044,6 @@ class RustLexSyntaxVisualizer:
         
     def show_tree_tab(self):
         self.notebook.select(self.tree_frame)
-        
-    def show_lr_tab(self):
-        self.notebook.select(self.lr_frame)
-        
-    def show_reduce_tab(self):
-        self.notebook.select(self.reduce_frame)
         
     def create_status_bar(self, parent):
         """创建状态栏 - 浅色设计"""
@@ -1030,7 +1061,7 @@ class RustLexSyntaxVisualizer:
         
         status_label = tk.Label(
             left_status, 
-            text="就绪 | LR(1) 语法分析器 | 支持模式匹配、所有权语义",
+            text="就绪 | 递归下降语法分析器 | 支持模式匹配、所有权语义",
             bg=self.colors['surface2'], fg=self.colors['fg_dim'],
             font=('Segoe UI', 9)
         )
@@ -1042,7 +1073,7 @@ class RustLexSyntaxVisualizer:
         
         memory_label = tk.Label(
             right_status,
-            text="LR(1) 分析器 • 移进-规约分析",
+            text="词法分析器 · 递归下降语法分析",
             bg=self.colors['surface2'], fg=self.colors['accent'],
             font=('Segoe UI', 9, 'bold')
         )
