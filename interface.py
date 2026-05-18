@@ -4,326 +4,85 @@
 浅色美化版本 - 清爽明亮的现代化UI设计
 """
 
+import importlib.util
+import sys
 import tkinter as tk
 from tkinter import ttk
-from enum import Enum
 import re
+from dataclasses import is_dataclass, fields
+from pathlib import Path
 
-# ==================== 预定义数据 ====================
+from lexer.lexer import Lexer
+from lexer.token import TokenType as LexerTokenType
+from error import ParseError
 
-class TokenType(Enum):
-    """词法单元类型"""
-    KEYWORD = "关键字"
-    IDENTIFIER = "标识符"
-    INTEGER = "整数常量"
-    FLOAT = "浮点常量"
-    STRING = "字符串常量"
-    CHAR = "字符常量"
-    BOOLEAN = "布尔常量"
-    OPERATOR = "运算符"
-    BOUNDARY = "界符"
-    ATTRIBUTE = "属性标记"
-    LIFETIME = "生命周期"
-    MACRO = "宏调用"
-    COMMENT = "注释"
+# 加载本地 parser.py，避免与标准库 parser 模块冲突
+parser_path = Path(__file__).with_name("parser.py")
+_spec = importlib.util.spec_from_file_location("local_parser", parser_path)
+if _spec is None or _spec.loader is None:
+    raise ImportError("无法加载本地 parser.py")
+_parser_module = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _parser_module
+_spec.loader.exec_module(_parser_module)
+Parser = _parser_module.Parser
 
-# 预定义的词法分析结果（模拟Rust代码的词法分析）
-PREDEFINED_TOKENS = [
-    {"index": 1, "type": TokenType.ATTRIBUTE, "value": "#[derive(Debug)]", "position": "1-17"},
-    {"index": 2, "type": TokenType.KEYWORD, "value": "struct", "position": "19-24"},
-    {"index": 3, "type": TokenType.IDENTIFIER, "value": "Person", "position": "26-31"},
-    {"index": 4, "type": TokenType.BOUNDARY, "value": "{", "position": "33-33"},
-    {"index": 5, "type": TokenType.IDENTIFIER, "value": "name", "position": "39-42"},
-    {"index": 6, "type": TokenType.BOUNDARY, "value": ":", "position": "43-43"},
-    {"index": 7, "type": TokenType.IDENTIFIER, "value": "String", "position": "45-50"},
-    {"index": 8, "type": TokenType.BOUNDARY, "value": ",", "position": "51-51"},
-    {"index": 9, "type": TokenType.IDENTIFIER, "value": "age", "position": "57-59"},
-    {"index": 10, "type": TokenType.BOUNDARY, "value": ":", "position": "60-60"},
-    {"index": 11, "type": TokenType.IDENTIFIER, "value": "u32", "position": "62-64"},
-    {"index": 12, "type": TokenType.BOUNDARY, "value": ",", "position": "65-65"},
-    {"index": 13, "type": TokenType.IDENTIFIER, "value": "email", "position": "71-75"},
-    {"index": 14, "type": TokenType.BOUNDARY, "value": ":", "position": "76-76"},
-    {"index": 15, "type": TokenType.IDENTIFIER, "value": "Option", "position": "78-83"},
-    {"index": 16, "type": TokenType.BOUNDARY, "value": "<", "position": "84-84"},
-    {"index": 17, "type": TokenType.IDENTIFIER, "value": "String", "position": "85-90"},
-    {"index": 18, "type": TokenType.BOUNDARY, "value": ">", "position": "91-91"},
-    {"index": 19, "type": TokenType.BOUNDARY, "value": ",", "position": "92-92"},
-    {"index": 20, "type": TokenType.BOUNDARY, "value": "}", "position": "98-98"},
-    {"index": 21, "type": TokenType.KEYWORD, "value": "impl", "position": "104-107"},
-    {"index": 22, "type": TokenType.IDENTIFIER, "value": "Person", "position": "109-114"},
-    {"index": 23, "type": TokenType.BOUNDARY, "value": "{", "position": "116-116"},
-    {"index": 24, "type": TokenType.KEYWORD, "value": "fn", "position": "122-123"},
-    {"index": 25, "type": TokenType.IDENTIFIER, "value": "new", "position": "125-127"},
-    {"index": 26, "type": TokenType.BOUNDARY, "value": "(", "position": "128-128"},
-    {"index": 27, "type": TokenType.IDENTIFIER, "value": "name", "position": "129-132"},
-    {"index": 28, "type": TokenType.BOUNDARY, "value": ":", "position": "133-133"},
-    {"index": 29, "type": TokenType.IDENTIFIER, "value": "String", "position": "135-140"},
-    {"index": 30, "type": TokenType.BOUNDARY, "value": ",", "position": "141-141"},
-    {"index": 31, "type": TokenType.IDENTIFIER, "value": "age", "position": "143-145"},
-    {"index": 32, "type": TokenType.BOUNDARY, "value": ":", "position": "146-146"},
-    {"index": 33, "type": TokenType.IDENTIFIER, "value": "u32", "position": "148-150"},
-    {"index": 34, "type": TokenType.BOUNDARY, "value": ")", "position": "151-151"},
-    {"index": 35, "type": TokenType.OPERATOR, "value": "->", "position": "153-154"},
-    {"index": 36, "type": TokenType.IDENTIFIER, "value": "Self", "position": "156-159"},
-    {"index": 37, "type": TokenType.BOUNDARY, "value": "{", "position": "161-161"},
-    {"index": 38, "type": TokenType.IDENTIFIER, "value": "Self", "position": "167-170"},
-    {"index": 39, "type": TokenType.BOUNDARY, "value": "{", "position": "172-172"},
-    {"index": 40, "type": TokenType.IDENTIFIER, "value": "name", "position": "178-181"},
-    {"index": 41, "type": TokenType.BOUNDARY, "value": ",", "position": "182-182"},
-    {"index": 42, "type": TokenType.IDENTIFIER, "value": "age", "position": "188-190"},
-    {"index": 43, "type": TokenType.BOUNDARY, "value": ",", "position": "191-191"},
-    {"index": 44, "type": TokenType.IDENTIFIER, "value": "email", "position": "197-201"},
-    {"index": 45, "type": TokenType.BOUNDARY, "value": ":", "position": "202-202"},
-    {"index": 46, "type": TokenType.IDENTIFIER, "value": "None", "position": "204-207"},
-    {"index": 47, "type": TokenType.BOUNDARY, "value": "}", "position": "213-213"},
-    {"index": 48, "type": TokenType.BOUNDARY, "value": "}", "position": "219-219"},
-    {"index": 49, "type": TokenType.KEYWORD, "value": "fn", "position": "225-226"},
-    {"index": 50, "type": TokenType.IDENTIFIER, "value": "greet", "position": "228-232"},
-    {"index": 51, "type": TokenType.BOUNDARY, "value": "(", "position": "233-233"},
-    {"index": 52, "type": TokenType.OPERATOR, "value": "&", "position": "234-234"},
-    {"index": 53, "type": TokenType.KEYWORD, "value": "self", "position": "235-238"},
-    {"index": 54, "type": TokenType.BOUNDARY, "value": ")", "position": "239-239"},
-    {"index": 55, "type": TokenType.OPERATOR, "value": "->", "position": "241-242"},
-    {"index": 56, "type": TokenType.IDENTIFIER, "value": "String", "position": "244-249"},
-    {"index": 57, "type": TokenType.BOUNDARY, "value": "{", "position": "251-251"},
-    {"index": 58, "type": TokenType.IDENTIFIER, "value": "format", "position": "257-262"},
-    {"index": 59, "type": TokenType.OPERATOR, "value": "!", "position": "263-263"},
-    {"index": 60, "type": TokenType.BOUNDARY, "value": "(", "position": "264-264"},
-    {"index": 61, "type": TokenType.STRING, "value": '"Hello, {}!"', "position": "265-276"},
-    {"index": 62, "type": TokenType.BOUNDARY, "value": ",", "position": "277-277"},
-    {"index": 63, "type": TokenType.IDENTIFIER, "value": "self", "position": "279-282"},
-    {"index": 64, "type": TokenType.OPERATOR, "value": ".", "position": "283-283"},
-    {"index": 65, "type": TokenType.IDENTIFIER, "value": "name", "position": "284-287"},
-    {"index": 66, "type": TokenType.BOUNDARY, "value": ")", "position": "288-288"},
-    {"index": 67, "type": TokenType.BOUNDARY, "value": "}", "position": "294-294"},
-    {"index": 68, "type": TokenType.BOUNDARY, "value": "}", "position": "300-300"},
-    {"index": 69, "type": TokenType.KEYWORD, "value": "fn", "position": "306-307"},
-    {"index": 70, "type": TokenType.IDENTIFIER, "value": "main", "position": "309-312"},
-    {"index": 71, "type": TokenType.BOUNDARY, "value": "(", "position": "313-313"},
-    {"index": 72, "type": TokenType.BOUNDARY, "value": ")", "position": "314-314"},
-    {"index": 73, "type": TokenType.BOUNDARY, "value": "{", "position": "316-316"},
-    {"index": 74, "type": TokenType.KEYWORD, "value": "let", "position": "322-324"},
-    {"index": 75, "type": TokenType.IDENTIFIER, "value": "person", "position": "326-331"},
-    {"index": 76, "type": TokenType.OPERATOR, "value": "=", "position": "333-333"},
-    {"index": 77, "type": TokenType.IDENTIFIER, "value": "Person", "position": "335-340"},
-    {"index": 78, "type": TokenType.OPERATOR, "value": "::", "position": "341-342"},
-    {"index": 79, "type": TokenType.IDENTIFIER, "value": "new", "position": "343-345"},
-    {"index": 80, "type": TokenType.BOUNDARY, "value": "(", "position": "346-346"},
-    {"index": 81, "type": TokenType.STRING, "value": '"Alice"', "position": "347-354"},
-    {"index": 82, "type": TokenType.BOUNDARY, "value": ",", "position": "355-355"},
-    {"index": 83, "type": TokenType.INTEGER, "value": "30", "position": "357-358"},
-    {"index": 84, "type": TokenType.BOUNDARY, "value": ")", "position": "359-359"},
-    {"index": 85, "type": TokenType.BOUNDARY, "value": ";", "position": "360-360"},
-    {"index": 86, "type": TokenType.KEYWORD, "value": "match", "position": "366-370"},
-    {"index": 87, "type": TokenType.IDENTIFIER, "value": "person", "position": "372-377"},
-    {"index": 88, "type": TokenType.OPERATOR, "value": ".", "position": "378-378"},
-    {"index": 89, "type": TokenType.IDENTIFIER, "value": "email", "position": "379-383"},
-    {"index": 90, "type": TokenType.BOUNDARY, "value": "{", "position": "385-385"},
-    {"index": 91, "type": TokenType.IDENTIFIER, "value": "Some", "position": "391-394"},
-    {"index": 92, "type": TokenType.BOUNDARY, "value": "(", "position": "395-395"},
-    {"index": 93, "type": TokenType.IDENTIFIER, "value": "e", "position": "396-396"},
-    {"index": 94, "type": TokenType.BOUNDARY, "value": ")", "position": "397-397"},
-    {"index": 95, "type": TokenType.OPERATOR, "value": "=>", "position": "399-400"},
-    {"index": 96, "type": TokenType.MACRO, "value": "println!", "position": "402-409"},
-    {"index": 97, "type": TokenType.BOUNDARY, "value": "(", "position": "410-410"},
-    {"index": 98, "type": TokenType.STRING, "value": '"Email: {}"', "position": "411-421"},
-    {"index": 99, "type": TokenType.BOUNDARY, "value": ",", "position": "422-422"},
-    {"index": 100, "type": TokenType.IDENTIFIER, "value": "e", "position": "424-424"},
-    {"index": 101, "type": TokenType.BOUNDARY, "value": ")", "position": "425-425"},
-    {"index": 102, "type": TokenType.BOUNDARY, "value": ",", "position": "426-426"},
-    {"index": 103, "type": TokenType.IDENTIFIER, "value": "None", "position": "432-435"},
-    {"index": 104, "type": TokenType.OPERATOR, "value": "=>", "position": "437-438"},
-    {"index": 105, "type": TokenType.MACRO, "value": "println!", "position": "440-447"},
-    {"index": 106, "type": TokenType.BOUNDARY, "value": "(", "position": "448-448"},
-    {"index": 107, "type": TokenType.STRING, "value": '"No email"', "position": "449-459"},
-    {"index": 108, "type": TokenType.BOUNDARY, "value": ")", "position": "460-460"},
-    {"index": 109, "type": TokenType.BOUNDARY, "value": ",", "position": "461-461"},
-    {"index": 110, "type": TokenType.BOUNDARY, "value": "}", "position": "467-467"},
-    {"index": 111, "type": TokenType.KEYWORD, "value": "let", "position": "473-475"},
-    {"index": 112, "type": TokenType.IDENTIFIER, "value": "greeting", "position": "477-484"},
-    {"index": 113, "type": TokenType.OPERATOR, "value": "=", "position": "486-486"},
-    {"index": 114, "type": TokenType.IDENTIFIER, "value": "person", "position": "488-493"},
-    {"index": 115, "type": TokenType.OPERATOR, "value": ".", "position": "494-494"},
-    {"index": 116, "type": TokenType.IDENTIFIER, "value": "greet", "position": "495-499"},
-    {"index": 117, "type": TokenType.BOUNDARY, "value": "(", "position": "500-500"},
-    {"index": 118, "type": TokenType.BOUNDARY, "value": ")", "position": "501-501"},
-    {"index": 119, "type": TokenType.BOUNDARY, "value": ";", "position": "502-502"},
-    {"index": 120, "type": TokenType.MACRO, "value": "println!", "position": "508-515"},
-    {"index": 121, "type": TokenType.BOUNDARY, "value": "(", "position": "516-516"},
-    {"index": 122, "type": TokenType.STRING, "value": '"{}"', "position": "517-520"},
-    {"index": 123, "type": TokenType.BOUNDARY, "value": ",", "position": "521-521"},
-    {"index": 124, "type": TokenType.IDENTIFIER, "value": "greeting", "position": "523-530"},
-    {"index": 125, "type": TokenType.BOUNDARY, "value": ")", "position": "531-531"},
-    {"index": 126, "type": TokenType.BOUNDARY, "value": ";", "position": "532-532"},
-    {"index": 127, "type": TokenType.BOUNDARY, "value": "}", "position": "538-538"},
-]
+# 从 tests 目录读取测试用例源代码
+TEST_FOLDER = Path(__file__).with_name("tests")
+TEST_FILES = [p.name for p in sorted(TEST_FOLDER.glob("*.rs"))]
+DEFAULT_TEST_FILE = TEST_FILES[0] if TEST_FILES else None
 
-# 示例Rust源代码
-EXAMPLE_CODE = '''#[derive(Debug)]
-struct Person {
-    name: String,
-    age: u32,
-    email: Option<String>,
+TOKEN_TYPE_LABELS = {
+    LexerTokenType.I32: "类型关键字",
+    LexerTokenType.LET: "关键字",
+    LexerTokenType.IF: "关键字",
+    LexerTokenType.ELSE: "关键字",
+    LexerTokenType.WHILE: "关键字",
+    LexerTokenType.RETURN: "关键字",
+    LexerTokenType.MUT: "关键字",
+    LexerTokenType.FN: "关键字",
+    LexerTokenType.FOR: "关键字",
+    LexerTokenType.IN: "关键字",
+    LexerTokenType.LOOP: "关键字",
+    LexerTokenType.BREAK: "关键字",
+    LexerTokenType.CONTINUE: "关键字",
+    LexerTokenType.IDENT: "标识符",
+    LexerTokenType.INT: "整数",
+    LexerTokenType.ASSIGN: "运算符",
+    LexerTokenType.PLUS: "运算符",
+    LexerTokenType.MINUS: "运算符",
+    LexerTokenType.STAR: "运算符",
+    LexerTokenType.SLASH: "运算符",
+    LexerTokenType.EQ: "比较运算符",
+    LexerTokenType.GT: "比较运算符",
+    LexerTokenType.GTE: "比较运算符",
+    LexerTokenType.LT: "比较运算符",
+    LexerTokenType.LTE: "比较运算符",
+    LexerTokenType.NOT_EQ: "比较运算符",
+    LexerTokenType.AND: "运算符",
+    LexerTokenType.LPAREN: "界符",
+    LexerTokenType.RPAREN: "界符",
+    LexerTokenType.LBRACE: "界符",
+    LexerTokenType.RBRACE: "界符",
+    LexerTokenType.LBRACKET: "界符",
+    LexerTokenType.RBRACKET: "界符",
+    LexerTokenType.SEMICOLON: "分隔符",
+    LexerTokenType.COLON: "分隔符",
+    LexerTokenType.COMMA: "分隔符",
+    LexerTokenType.ARROW: "运算符",
+    LexerTokenType.DOT: "运算符",
+    LexerTokenType.DOTDOT: "运算符",
+    LexerTokenType.EOF: "结束符",
+    LexerTokenType.ILLEGAL: "非法字符",
 }
 
-impl Person {
-    fn new(name: String, age: u32) -> Self {
-        Self {
-            name,
-            age,
-            email: None,
-        }
-    }
-    
-    fn greet(&self) -> String {
-        format!("Hello, {}!", self.name)
-    }
-}
-
-fn main() {
-    let person = Person::new(String::from("Alice"), 30);
-    
-    match person.email {
-        Some(e) => println!("Email: {}", e),
-        None => println!("No email"),
-    }
-    
-    let greeting = person.greet();
-    println!("{}", greeting);
-}'''
-
-# 预定义的LR(1)分析表数据
 LR1_DATA = {
-    "states": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"],
-    "action": {
-        ("0", "struct"): "s2", ("0", "impl"): "s3", ("0", "fn"): "s4", ("0", "let"): "s5", ("0", "#"): "acc",
-        ("2", "identifier"): "s6", ("2", "{"): "s7",
-        ("3", "identifier"): "s8", ("3", "{"): "s9",
-        ("4", "identifier"): "s10", ("4", "("): "s11",
-        ("5", "identifier"): "s12", ("5", "mut"): "s13",
-        ("6", ":"): "s14", ("6", ","): "r1",
-        ("7", "identifier"): "s15", ("7", "}"): "r2",
-    },
-    "goto": {
-        ("0", "Program"): "1",
-        ("2", "StructDef"): "16",
-        ("3", "ImplDef"): "17",
-        ("4", "FnDef"): "18",
-    },
-    "productions": [
-        "Program -> Item*",
-        "Item -> StructDef | ImplDef | FnDef",
-        "StructDef -> 'struct' Identifier '{' Field* '}'",
-        "Field -> Identifier ':' Type ','",
-        "ImplDef -> 'impl' Identifier '{' Method* '}'",
-        "MethodDef -> 'fn' Identifier '(' Parameters ')' '->' Type Block",
-        "LetStmt -> 'let' Pattern '=' Expression ';'",
-        "MatchExpr -> 'match' Expression '{' MatchArm* '}'",
-        "MatchArm -> Pattern '=>' Expression ','",
-    ]
+    'states': [],
+    'action': {},
+    'goto': {},
+    'productions': [],
 }
 
-# 预定义的规约过程
-REDUCE_PROCESS = [
-    {"step": 1, "state_stack": "[0]", "symbol_stack": "[]", "input": "struct", "action": "移进 struct"},
-    {"step": 2, "state_stack": "[0,2]", "symbol_stack": "[struct]", "input": "Person", "action": "移进 Identifier: Person"},
-    {"step": 3, "state_stack": "[0,2,6]", "symbol_stack": "[struct, Person]", "input": "{", "action": "移进 {"},
-    {"step": 4, "state_stack": "[0,2,6,7]", "symbol_stack": "[struct, Person, {]", "input": "name", "action": "移进 Identifier: name"},
-    {"step": 5, "state_stack": "[0,2,6,7,15]", "symbol_stack": "[struct, Person, {, name]", "input": ":", "action": "移进 :"},
-    {"step": 6, "state_stack": "[0,2,6,7,15,14]", "symbol_stack": "[struct, Person, {, name, :]", "input": "String", "action": "移进 Type: String"},
-    {"step": 7, "state_stack": "[0,2,6,7,15,14,19]", "symbol_stack": "[struct, Person, {, name, :, String]", "input": ",", "action": "规约 Field -> Identifier : Type ,"},
-    {"step": 8, "state_stack": "[0,2,6,7,20]", "symbol_stack": "[struct, Person, {, Field]", "input": "age", "action": "继续解析下一个字段..."},
-    {"step": 9, "state_stack": "[0,2,6,7,20]", "symbol_stack": "[struct, Person, {, Field*]", "input": "}", "action": "规约 StructDef -> 'struct' Identifier '{' Field* '}'"},
-    {"step": 10, "state_stack": "[0,1]", "symbol_stack": "[Program]", "input": "#", "action": "接受 - 语法分析成功"},
-]
-
-# 预定义的语法树结构
-SYNTAX_TREE = {
-    "root": {
-        "name": "Program",
-        "children": [
-            {
-                "name": "Item: StructDef",
-                "children": [
-                    {"name": "Attribute: #[derive(Debug)]", "children": []},
-                    {"name": "struct", "children": []},
-                    {"name": "Identifier: Person", "children": []},
-                    {
-                        "name": "Fields",
-                        "children": [
-                            {"name": "Field: name: String", "children": []},
-                            {"name": "Field: age: u32", "children": []},
-                            {"name": "Field: email: Option<String>", "children": []},
-                        ]
-                    }
-                ]
-            },
-            {
-                "name": "Item: ImplDef",
-                "children": [
-                    {"name": "impl", "children": []},
-                    {"name": "Identifier: Person", "children": []},
-                    {
-                        "name": "Methods",
-                        "children": [
-                            {
-                                "name": "Method: new",
-                                "children": [
-                                    {"name": "Parameters: name: String, age: u32", "children": []},
-                                    {"name": "Return: Self", "children": []},
-                                    {"name": "Body: Self { name, age, email: None }", "children": []}
-                                ]
-                            },
-                            {
-                                "name": "Method: greet",
-                                "children": [
-                                    {"name": "Parameters: &self", "children": []},
-                                    {"name": "Return: String", "children": []},
-                                    {"name": "Body: format!(\"Hello, {}!\", self.name)", "children": []}
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            },
-            {
-                "name": "Item: FnDef - main",
-                "children": [
-                    {"name": "fn", "children": []},
-                    {"name": "Identifier: main", "children": []},
-                    {"name": "Parameters: ()", "children": []},
-                    {
-                        "name": "Block",
-                        "children": [
-                            {
-                                "name": "LetStmt: person",
-                                "children": [
-                                    {"name": "Pattern: person", "children": []},
-                                    {"name": "Expression: Person::new(String::from(\"Alice\"), 30)", "children": []}
-                                ]
-                            },
-                            {
-                                "name": "MatchExpr: person.email",
-                                "children": [
-                                    {"name": "Arm: Some(e) => println!(\"Email: {}\", e)", "children": []},
-                                    {"name": "Arm: None => println!(\"No email\")", "children": []}
-                                ]
-                            },
-                            {
-                                "name": "LetStmt: greeting",
-                                "children": [
-                                    {"name": "Pattern: greeting", "children": []},
-                                    {"name": "Expression: person.greet()", "children": []}
-                                ]
-                            },
-                            {"name": "MacroCall: println!(\"{}\", greeting)", "children": []}
-                        ]
-                    }
-                ]
-            }
-        ]
-    }
-}
+REDUCE_PROCESS = []
 
 
 class RustLexSyntaxVisualizer:
@@ -366,7 +125,18 @@ class RustLexSyntaxVisualizer:
         
         self.style = ttk.Style(self.root)
         self.configure_ttk_style()
+
+        self.current_tokens = []
+        self.lexer_errors = []
+        self.parse_error = None
+        self.ast = None
+
+        self.AST_NODE_X_GAP = 24
+        self.AST_NODE_Y_GAP = 100
+
         self.setup_ui()
+        if DEFAULT_TEST_FILE:
+            self.run_analysis()
         
     def configure_ttk_style(self):
         """配置ttk主题样式 - 浅色主题"""
@@ -450,6 +220,7 @@ class RustLexSyntaxVisualizer:
         
         self.create_result_panel(content_frame)
         self.create_status_bar(main_container)
+        self.run_analysis()
         
     def create_title_bar(self, parent):
         """创建标题栏 - 现代化浅色设计"""
@@ -493,6 +264,18 @@ class RustLexSyntaxVisualizer:
                             bg=self.colors['bg_card'], fg=self.colors['fg'])
         title_label.pack(side=tk.LEFT, padx=(8, 0))
         
+        header_right = tk.Frame(panel_header, bg=self.colors['bg_card'])
+        header_right.pack(side=tk.RIGHT, padx=16, pady=8)
+        
+        self.test_selector = ttk.Combobox(header_right, values=TEST_FILES, state='readonly', width=24)
+        if DEFAULT_TEST_FILE:
+            self.test_selector.set(DEFAULT_TEST_FILE)
+        self.test_selector.bind('<<ComboboxSelected>>', self.on_test_selection)
+        self.test_selector.pack(side=tk.LEFT, padx=(0, 8))
+        
+        analyze_button = ttk.Button(header_right, text="运行分析", style='Primary.TButton', command=self.run_analysis)
+        analyze_button.pack(side=tk.LEFT)
+        
         # 代码区域
         code_frame = tk.Frame(left_frame, bg=self.colors['surface2'], bd=1, relief=tk.FLAT)
         code_frame.pack(fill=tk.BOTH, expand=True, pady=(2, 0))
@@ -524,20 +307,22 @@ class RustLexSyntaxVisualizer:
         self.code_text.config(xscrollcommand=h_scrollbar.set)
         
         # 插入代码并应用高亮
-        self.code_text.insert(1.0, EXAMPLE_CODE)
-        self.code_text.config(state=tk.NORMAL)  # 先设置为可编辑状态以应用高亮
-        self.apply_rust_syntax_highlight()
-        self.code_text.config(state=tk.DISABLED)  # 最后设置为只读
+        if DEFAULT_TEST_FILE:
+            self.load_test_case(DEFAULT_TEST_FILE)
+        else:
+            self.code_text.insert(1.0, "// 未找到 tests 目录中的示例文件")
+            self.apply_rust_syntax_highlight()
         
         # 统计信息栏
         stats_frame = tk.Frame(left_frame, bg=self.colors['surface2'], height=36)
         stats_frame.pack(fill=tk.X, pady=(4, 0))
         stats_frame.pack_propagate(False)
         
-        lines = len(EXAMPLE_CODE.split('\n'))
-        chars = len(EXAMPLE_CODE)
+        current_source = self.code_text.get(1.0, tk.END).rstrip('\n')
+        lines = len(current_source.split('\n')) if current_source else 0
+        chars = len(current_source)
         
-        stats_text = f"📊 {lines} 行  |  {chars} 字符  |  🦀 Rust Edition 2024"
+        stats_text = f"📊 {lines} 行  |  {chars} 字符  "
         stats_label = tk.Label(
             stats_frame, text=stats_text,
             font=('Segoe UI', 10),
@@ -559,10 +344,14 @@ class RustLexSyntaxVisualizer:
         # 获取所有文本内容
         content = self.code_text.get(1.0, tk.END)
         
-        # 清除所有已有标签
+        # 清除所有已有标签范围（保留标签定义以复用样式）
         for tag in self.code_text.tag_names():
             if tag not in ('sel', 'tk_focus', 'tk_focusNext', 'tk_focusPrev'):
-                self.code_text.tag_delete(tag)
+                try:
+                    self.code_text.tag_remove(tag, '1.0', tk.END)
+                except Exception:
+                    # 如果某些标签无法移除，忽略错误以保证高亮过程继续
+                    pass
         
         # 初始化使用的标签集合
         self.used_tags = set()
@@ -676,7 +465,7 @@ class RustLexSyntaxVisualizer:
         self.lex_tree.column('序号', width=60, anchor='center')
         self.lex_tree.column('类型', width=120)
         self.lex_tree.column('值', width=320)
-        self.lex_tree.column('位置', width=100, anchor='center')
+        self.lex_tree.column('位置', width=120, anchor='center')
         
         scroll_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.lex_tree.yview, style='Vertical.TScrollbar')
         scroll_x = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.lex_tree.xview, style='Horizontal.TScrollbar')
@@ -689,27 +478,20 @@ class RustLexSyntaxVisualizer:
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
         
-        # 设置交替行颜色
-        for i, token in enumerate(PREDEFINED_TOKENS):
-            item_id = self.lex_tree.insert('', tk.END, values=(
-                token['index'], token['type'].value, token['value'], token['position']
-            ))
-            if i % 2 == 0:
-                self.lex_tree.tag_configure('oddrow', background=self.colors['surface2'])
-                self.lex_tree.item(item_id, tags=('oddrow',))
+        self.lex_tree.tag_configure('oddrow', background=self.colors['surface2'])
         
         # 统计栏
         stats_frame = tk.Frame(self.lex_frame, bg=self.colors['surface2'], height=40)
         stats_frame.pack(fill=tk.X, side=tk.BOTTOM)
         stats_frame.pack_propagate(False)
         
-        stats_label = tk.Label(
-            stats_frame, 
-            text=f"✅ 共识别 {len(PREDEFINED_TOKENS)} 个词法单元  |  Rust 词法规范",
+        self.lex_stats_label = tk.Label(
+            stats_frame,
+            text="", 
             font=('Segoe UI', 10),
             bg=self.colors['surface2'], fg=self.colors['success']
         )
-        stats_label.pack(padx=16, pady=10, anchor='w')
+        self.lex_stats_label.pack(padx=16, pady=10, anchor='w')
         
     def create_syntax_tab(self):
         """创建语法分析结果标签页 - 浅色版"""
@@ -733,82 +515,249 @@ class RustLexSyntaxVisualizer:
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4))
         self.report_text.config(yscrollcommand=scroll_y.set)
         
-        self.generate_syntax_report()
-        self.report_text.config(state=tk.DISABLED)
-        
-        # 配置文本标签样式
         self.report_text.tag_config("success", foreground=self.colors['success'])
         self.report_text.tag_config("warning", foreground=self.colors['warning'])
         self.report_text.tag_config("accent", foreground=self.colors['accent'])
         
-    def generate_syntax_report(self):
-        """生成语法分析报告 - 浅色版"""
+    def update_syntax_report(self):
+        """生成语法分析报告 - 动态内容"""
+        self.report_text.config(state=tk.NORMAL)
+        self.report_text.delete(1.0, tk.END)
         report = []
         report.append("═" * 80)
-        report.append("🦀 RUST 语法分析报告")
+        report.append("🦀 语法分析报告")
         report.append("═" * 80)
         report.append("")
-        report.append("✅ 语法分析成功! - 符合 Rust 语法规范")
+        report.append(f"📊 词法单元总数: {len(self.current_tokens)}")
         report.append("")
-        report.append(f"📊 词法单元总数: {len(PREDEFINED_TOKENS)}")
-        report.append("")
-        
-        report.append("📋 语法结构摘要:")
-        report.append("─" * 60)
-        report.append("  ✓ 属性标记: #[derive(Debug)]")
-        report.append("  ✓ 结构体定义: struct Person { ... }")
-        report.append("  ✓ 结构体字段: name: String, age: u32, email: Option<String>")
-        report.append("  ✓ impl 块: impl Person { ... }")
-        report.append("  ✓ 关联函数: fn new(...) -> Self")
-        report.append("  ✓ 方法定义: fn greet(&self) -> String")
-        report.append("  ✓ let 绑定: let person = Person::new(...)")
-        report.append("  ✓ match 模式匹配: match person.email { ... }")
-        report.append("  ✓ 宏调用: println!(\"...\", ...)")
-        report.append("")
-        
-        report.append("📖 Rust 文法产生式:")
-        report.append("─" * 60)
-        for i, prod in enumerate(LR1_DATA['productions']):
-            report.append(f"  ({i+1:2d}) {prod}")
-        report.append("")
-        
-        report.append("🎯 Rust 特有语法分析:")
-        report.append("─" * 60)
-        report.append("  • 模式匹配 (Pattern Matching)")
-        report.append("  • 所有权系统 (Ownership System)")
-        report.append("  • 生命周期 (Lifetimes)")
-        report.append("  • 宏系统 (Macros)")
-        report.append("  • 特征系统 (Traits)")
-        report.append("  • 枚举类型 (Enums)")
-        report.append("")
-        
+
+        if self.lexer_errors:
+            report.append("❌ 词法错误:")
+            for error in self.lexer_errors:
+                report.append(f"  - {error}")
+            report.append("")
+
+        if self.parse_error or self.lexer_errors:
+            if self.parse_error:
+                report.append("❌ 语法分析失败:")
+                report.append(f"  {self.parse_error}")
+                report.append("")
+            else:
+                report.append("❌ 语法诊断: 存在词法错误，语法分析结果可能不准确。")
+                report.append("")
+            report.append("请修复错误后重新运行分析。")
+        else:
+            report.append("✅ 语法分析成功! 当前输入符合可解析子集语法。")
+            report.append("")
+            report.append("📋 语法结构摘要:")
+            report.append("─" * 60)
+            if self.ast is not None:
+                report.append(f"  ✓ 程序包含 {len(self.ast.body)} 条顶层声明")
+                for node in self.ast.body:
+                    report.append(f"  ✓ 声明类型: {node.__class__.__name__}")
+            report.append("")
+            report.append("📌 支持语法特性:")
+            report.append("  • 函数声明: fn name(...) -> type")
+            report.append("  • let 绑定与可变变量")
+            report.append("  • if 条件语句")
+            report.append("  • return 语句")
+            report.append("  • 赋值语句与表达式语句")
+            report.append("  • 二元运算与函数调用")
+            report.append("")
+
         report.append("═" * 80)
-        report.append("✨ 分析完成 - 代码符合 Rust 语法规则")
-        
         self.report_text.insert(1.0, '\n'.join(report))
+        self.report_text.config(state=tk.DISABLED)
         
     def create_tree_tab(self):
         """创建语法树标签页 - 浅色版"""
         self.tree_frame = tk.Frame(self.notebook, bg=self.colors['bg'])
         self.notebook.add(self.tree_frame, text="🌲 抽象语法树")
         
-        tree_view_frame = tk.Frame(self.tree_frame, bg=self.colors['surface2'], bd=1, relief=tk.FLAT)
-        tree_view_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        canvas_wrapper = tk.Frame(self.tree_frame, bg=self.colors['surface2'], bd=1, relief=tk.FLAT)
+        canvas_wrapper.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
         
-        self.tree_view = ttk.Treeview(tree_view_frame, style='Treeview', selectmode='browse')
-        self.tree_view.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.tree_canvas = tk.Canvas(canvas_wrapper, bg=self.colors['bg_light'], highlightthickness=0)
+        self.tree_canvas.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         
-        scroll_y = ttk.Scrollbar(tree_view_frame, orient=tk.VERTICAL, command=self.tree_view.yview, style='Vertical.TScrollbar')
+        scroll_y = ttk.Scrollbar(canvas_wrapper, orient=tk.VERTICAL, command=self.tree_canvas.yview, style='Vertical.TScrollbar')
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree_view.configure(yscrollcommand=scroll_y.set)
+        self.tree_canvas.configure(yscrollcommand=scroll_y.set)
         
-        def add_tree_nodes(parent, node):
-            node_id = self.tree_view.insert(parent, tk.END, text=node['name'], open=True)
-            for child in node.get('children', []):
-                add_tree_nodes(node_id, child)
-                
-        add_tree_nodes('', SYNTAX_TREE['root'])
+        scroll_x = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree_canvas.xview, style='Horizontal.TScrollbar')
+        scroll_x.pack(fill=tk.X, padx=12)
+        self.tree_canvas.configure(xscrollcommand=scroll_x.set)
         
+        self.tree_canvas.bind('<Configure>', lambda event: self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox('all')))
+        
+    def _ast_to_tree_data(self, node):
+        if is_dataclass(node):
+            node_name = node.__class__.__name__
+            children = []
+            for field in fields(node):
+                value = getattr(node, field.name)
+                if value is None:
+                    continue
+                if isinstance(value, list):
+                    if not value:
+                        children.append({'name': f"{field.name}: []", 'children': []})
+                        continue
+                    list_children = []
+                    for idx, item in enumerate(value):
+                        item_node = self._ast_to_tree_data(item)
+                        item_node['name'] = f"[{idx}] {item_node['name']}"
+                        list_children.append(item_node)
+                    children.append({'name': field.name, 'children': list_children})
+                elif is_dataclass(value):
+                    child = self._ast_to_tree_data(value)
+                    child['name'] = f"{field.name}: {child['name']}"
+                    children.append(child)
+                else:
+                    children.append({'name': f"{field.name}: {value}", 'children': []})
+            return {'name': node_name, 'children': children}
+        elif isinstance(node, list):
+            children = []
+            for idx, item in enumerate(node):
+                item_node = self._ast_to_tree_data(item)
+                item_node['name'] = f"[{idx}] {item_node['name']}"
+                children.append(item_node)
+            return {
+                'name': 'list',
+                'children': children,
+            }
+        else:
+            return {'name': repr(node), 'children': []}
+
+    def _measure_ast_text(self, text: str) -> tuple[int, int]:
+        width = max(120, len(text) * 7 + 24)
+        height = 40
+        return width, height
+
+    def _prepare_ast_layout(self, node: dict) -> int:
+        node_width, node_height = self._measure_ast_text(node['name'])
+        node['node_width'] = node_width
+        node['node_height'] = node_height
+        if not node.get('children'):
+            node['subtree_width'] = node_width
+            return node['subtree_width']
+
+        child_widths = [self._prepare_ast_layout(child) for child in node['children']]
+        total_children = sum(child_widths) + self.AST_NODE_X_GAP * (len(child_widths) - 1)
+        node['subtree_width'] = max(node_width, total_children)
+        return node['subtree_width']
+
+    def _assign_ast_positions(self, node: dict, x: int, y: int):
+        node['x'] = x + node['subtree_width'] / 2
+        node['y'] = y
+        if not node.get('children'):
+            return
+
+        total_children = sum(child['subtree_width'] for child in node['children']) + self.AST_NODE_X_GAP * (len(node['children']) - 1)
+        start_x = x + (node['subtree_width'] - total_children) / 2
+        current_x = start_x
+        for child in node['children']:
+            self._assign_ast_positions(child, current_x, y + self.AST_NODE_Y_GAP)
+            current_x += child['subtree_width'] + self.AST_NODE_X_GAP
+
+    def _draw_ast_tree(self, node: dict):
+        x = node['x']
+        y = node['y']
+        w = node['node_width']
+        h = node['node_height']
+        x0, y0, x1, y1 = x - w / 2, y - h / 2, x + w / 2, y + h / 2
+
+        for child in node.get('children', []):
+            self.tree_canvas.create_line(
+                x, y1, child['x'], child['y'] - child['node_height'] / 2,
+                fill=self.colors['border'], width=2)
+            self._draw_ast_tree(child)
+
+        self.tree_canvas.create_rectangle(
+            x0, y0, x1, y1,
+            fill=self.colors['surface3'], outline=self.colors['border'], width=1)
+        self.tree_canvas.create_text(
+            x, y,
+            text=node['name'],
+            font=('Segoe UI', 10),
+            fill=self.colors['fg'],
+            anchor='c')
+
+    def update_lex_tree(self):
+        """更新词法分析结果视图"""
+        self.lex_tree.delete(*self.lex_tree.get_children())
+        for i, token in enumerate(self.current_tokens, start=1):
+            location = f"{token.line}:{token.col + 1}"
+            type_name = TOKEN_TYPE_LABELS.get(token.type, token.type.name)
+            item_id = self.lex_tree.insert('', tk.END, values=(i, type_name, token.literal, location))
+            if i % 2 == 0:
+                self.lex_tree.item(item_id, tags=('oddrow',))
+
+        errors_text = "无词法错误"
+        if self.lexer_errors:
+            errors_text = f"词法错误 {len(self.lexer_errors)} 个"
+        self.lex_stats_label.config(text=f"✅ 识别 {len(self.current_tokens)} 个词法单元  |  {errors_text}")
+
+    def on_test_selection(self, event):
+        selected = self.test_selector.get()
+        if selected:
+            self.load_test_case(selected)
+            self.run_analysis()
+
+    def load_test_case(self, filename: str):
+        file_path = TEST_FOLDER.joinpath(filename)
+        if file_path.exists():
+            content = file_path.read_text(encoding='utf-8')
+            self.code_text.config(state=tk.NORMAL)
+            self.code_text.delete(1.0, tk.END)
+            self.code_text.insert(1.0, content)
+            self.apply_rust_syntax_highlight()
+        else:
+            self.code_text.config(state=tk.NORMAL)
+            self.code_text.delete(1.0, tk.END)
+            self.code_text.insert(1.0, f"// 找不到测试文件: {filename}")
+            self.apply_rust_syntax_highlight()
+
+    def update_ast_tree(self):
+        """使用解析到的 AST 更新语法树视图"""
+        self.tree_canvas.delete('all')
+
+        if self.ast is None:
+            self.tree_canvas.create_text(
+                20, 20,
+                text='无可视化语法树，先运行分析',
+                anchor='nw',
+                fill=self.colors['fg'],
+                font=('Segoe UI', 12, 'bold'))
+            self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox('all'))
+            return
+
+        tree_data = self._ast_to_tree_data(self.ast)
+        self._prepare_ast_layout(tree_data)
+        self._assign_ast_positions(tree_data, 20, 40)
+        self._draw_ast_tree(tree_data)
+        self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox('all'))
+
+    def run_analysis(self):
+        """执行词法分析和语法分析"""
+        source = self.code_text.get('1.0', tk.END).rstrip()
+        lexer = Lexer(source)
+        self.apply_rust_syntax_highlight()
+        self.current_tokens = lexer.get_all_tokens()
+        self.lexer_errors = lexer.get_errors()
+        self.parse_error = None
+        self.ast = None
+
+        try:
+            parser = Parser(self.current_tokens)
+            self.ast = parser.parse_program()
+        except ParseError as exc:
+            self.parse_error = exc
+
+        self.update_lex_tree()
+        self.update_syntax_report()
+        self.update_ast_tree()
+        self.code_text.config(state=tk.NORMAL)
+
     def create_lr_tab(self):
         """创建LR(1)分析表标签页 - 浅色版"""
         self.lr_frame = tk.Frame(self.notebook, bg=self.colors['bg'])
@@ -837,60 +786,28 @@ class RustLexSyntaxVisualizer:
         self.lr_text.config(state=tk.DISABLED)
         
     def generate_lr_table_text(self):
-        """生成LR(1)分析表文本 - 浅色版"""
+        """生成LR(1)分析表文本 - 说明当前语法分析类型"""
         table_text = []
         table_text.append("═" * 100)
-        table_text.append("🦀 LR(1) 分析表 - Rust 语法")
+        table_text.append("🦀 语法分析说明")
         table_text.append("═" * 100)
         table_text.append("")
-        table_text.append(f"📊 状态数: {len(LR1_DATA['states'])}")
+        table_text.append("本演示使用当前项目中的词法分析器和递归下降解析器，而非完整的 LR(1) 分析表。")
         table_text.append("")
-        
-        table_text.append("📋 ACTION 表 (移进/规约):")
+        table_text.append("当前支持语法子集说明:")
         table_text.append("─" * 100)
-        table_text.append(f"{'状态':<6} {'struct':<10} {'impl':<10} {'fn':<10} {'let':<10} {'identifier':<12} {'#':<6}")
-        table_text.append("─" * 100)
-        
-        action_table = {}
-        for (state, symbol), action in LR1_DATA['action'].items():
-            if state not in action_table:
-                action_table[state] = {}
-            action_table[state][symbol] = action
-            
-        for state in LR1_DATA['states']:
-            row = f"{state:<6}"
-            for sym in ['struct', 'impl', 'fn', 'let', 'identifier', '#']:
-                action = action_table.get(state, {}).get(sym, '')
-                row += f"{action:<10}"
-            table_text.append(row)
-            
+        table_text.append("  • 函数声明 fn name(...) -> type")
+        table_text.append("  • let 可变绑定与类型注释")
+        table_text.append("  • if 条件语句")
+        table_text.append("  • return 语句")
+        table_text.append("  • 赋值语句与表达式语句")
+        table_text.append("  • 二元运算、函数调用与比较表达式")
         table_text.append("")
-        table_text.append("📋 GOTO 表 (状态转移):")
-        table_text.append("─" * 80)
-        table_text.append(f"{'状态':<6} {'Program':<12} {'StructDef':<12} {'ImplDef':<12} {'FnDef':<10}")
-        table_text.append("─" * 80)
-        
-        goto_table = {}
-        for (state, symbol), goto in LR1_DATA['goto'].items():
-            if state not in goto_table:
-                goto_table[state] = {}
-            goto_table[state][symbol] = goto
-            
-        for state in LR1_DATA['states']:
-            row = f"{state:<6}"
-            for sym in ['Program', 'StructDef', 'ImplDef', 'FnDef']:
-                goto = goto_table.get(state, {}).get(sym, '')
-                row += f"{goto:<12}"
-            table_text.append(row)
-            
+        table_text.append("该标签页保留为语法分析说明区，帮助理解项目当前解析能力。")
         table_text.append("")
-        table_text.append("📌 符号说明:")
-        table_text.append("─" * 50)
-        table_text.append("  s#  - 移进 (shift) 到状态 #")
-        table_text.append("  r#  - 规约 (reduce) 使用产生式 #")
-        table_text.append("  acc - 接受输入")
-        table_text.append("  空  - 错误状态")
-        
+        table_text.append("提示: 如果需要，可以在本项目后续扩展中补充完整的 LR(1) 分析表。")
+        table_text.append("")
+        table_text.append("═" * 100)
         self.lr_text.insert(1.0, '\n'.join(table_text))
         
     def create_reduce_tab(self):
@@ -973,7 +890,7 @@ class RustLexSyntaxVisualizer:
         
         status_label = tk.Label(
             left_status, 
-            text="就绪 | 🦀 Rust Edition 2024 | LR(1) 语法分析器 | 支持模式匹配、所有权语义",
+            text="就绪 | LR(1) 语法分析器 | 支持模式匹配、所有权语义",
             bg=self.colors['surface2'], fg=self.colors['fg_dim'],
             font=('Segoe UI', 9)
         )
