@@ -1,0 +1,12 @@
+digraph AST {
+	node [fontname=monospace shape=box]
+	node0 [label=Program]
+	node1 [label="Function: ret_test"]
+	node2 [label="Type: i32"]
+	node1 -> node2 [label=return]
+	node3 [label=Return]
+	node4 [label="Literal: 10"]
+	node3 -> node4 [label=value]
+	node1 -> node3 [label=body]
+	node0 -> node1
+}

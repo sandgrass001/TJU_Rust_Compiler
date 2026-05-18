@@ -1,5 +1,5 @@
 # ast_printer.py or add to parser.py
-import io # Needed to capture print output for GUI
+import io
 from dataclasses import is_dataclass
 from ast_nodes import *
 
@@ -57,7 +57,7 @@ class ASTPrinter:
         self.indent_level -= 1
 
     def visit_letstatement(self, node: LetStatement):
-        type_str = f": {node.type_name}" if node.type_name else ""
+        type_str = f", type='{node.type_name}'" if node.type_name else ""
         self._print(f"LetStatement(name='{node.name}', mutable={node.mutable}{type_str})")
         if node.value:
             self.indent_level += 1
@@ -98,8 +98,8 @@ class ASTPrinter:
         self.indent_level -= 1
 
     def visit_parameter(self, node: Parameter):
-        type_str = f": {node.type_name}" if node.type_name else ""
-        self._print(f"Parameter(name='{node.name}'{type_str}, mutable={node.mutable})")
+        type_str = f", type='{node.type_name}'" if node.type_name else ""
+        self._print(f"Parameter(name='{node.name}', mutable={node.mutable}{type_str})")
 
     def visit_ifstatement(self, node: IfStatement):
         self._print("IfStatement:")
@@ -172,3 +172,24 @@ class ASTPrinter:
         self.indent_level += 1
         self.visit(node.value)
         self.indent_level -= 2
+
+    def visit_emptystatement(self, node: EmptyStatement):
+        self._print("EmptyStatement")
+
+    def visit_whilestatement(self, node: WhileStatement):
+        self._print("WhileStatement:")
+        self.indent_level += 1
+        self._print("Condition:")
+        self.indent_level += 1
+        self.visit(node.condition)
+        self.indent_level -= 1
+        if node.body:
+            self._print("Body:")
+            self.indent_level += 1
+            for s in node.body:
+                self.visit(s)
+            self.indent_level -= 1
+        self.indent_level -= 1
+
+    def visit_lvalue(self, node: LValue):
+        self._print(f"LValue(name='{node.name}')")

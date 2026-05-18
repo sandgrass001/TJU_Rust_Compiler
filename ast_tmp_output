@@ -1,6 +1,0 @@
-digraph AST {
-	node [fontname=monospace shape=box]
-	node0 [label=Program]
-	node1 [label=add]
-	node0 -> node1
-}

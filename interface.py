@@ -1,10 +1,12 @@
-"""
+﻿"""
 类Rust语言词法语法分析器 - 可视化演示程序
 文件名: rust_lex_syntax_visualizer.py
 浅色美化版本 - 清爽明亮的现代化UI设计
 """
 
 import importlib.util
+import base64
+import io
 import sys
 import tkinter as tk
 from tkinter import ttk
@@ -12,9 +14,17 @@ import re
 from dataclasses import is_dataclass, fields
 from pathlib import Path
 
+from ast_drawer import ASTGraphvizDrawer
+from ast_printer import ASTPrinter
 from lexer.lexer import Lexer
 from lexer.token import TokenType as LexerTokenType
 from error import ParseError
+
+try:
+    from PIL import Image, ImageTk
+except ModuleNotFoundError:
+    Image = None
+    ImageTk = None
 
 # 加载本地 parser.py，避免与标准库 parser 模块冲突
 parser_path = Path(__file__).with_name("parser.py")
@@ -130,6 +140,12 @@ class RustLexSyntaxVisualizer:
         self.lexer_errors = []
         self.parse_error = None
         self.ast = None
+        self.ast_text = ""
+        self.ast_image_bytes = None
+        self.ast_source_image = None
+        self.ast_photo_image = None
+        self.ast_zoom = 1.0
+        self.ast_fit_zoom = 1.0
 
         self.AST_NODE_X_GAP = 24
         self.AST_NODE_Y_GAP = 100
@@ -552,6 +568,12 @@ class RustLexSyntaxVisualizer:
             report.append("📋 语法结构摘要:")
             report.append("─" * 60)
             if self.ast is not None:
+                if self.ast_text:
+                    report.append("")
+                    report.append("AST 文本结构:")
+                    report.append("-" * 60)
+                    report.append(self.ast_text.rstrip())
+                    report.append("")
                 report.append(f"  ✓ 程序包含 {len(self.ast.body)} 条顶层声明")
                 for node in self.ast.body:
                     report.append(f"  ✓ 声明类型: {node.__class__.__name__}")
@@ -573,9 +595,27 @@ class RustLexSyntaxVisualizer:
         """创建语法树标签页 - 浅色版"""
         self.tree_frame = tk.Frame(self.notebook, bg=self.colors['bg'])
         self.notebook.add(self.tree_frame, text="🌲 抽象语法树")
+
+        toolbar = tk.Frame(self.tree_frame, bg=self.colors['surface2'], height=40)
+        toolbar.pack(fill=tk.X, padx=12, pady=(12, 0))
+        toolbar.pack_propagate(False)
+
+        ttk.Button(toolbar, text="-", command=lambda: self.zoom_ast(0.8)).pack(side=tk.LEFT, padx=(8, 4), pady=6)
+        ttk.Button(toolbar, text="+", command=lambda: self.zoom_ast(1.25)).pack(side=tk.LEFT, padx=4, pady=6)
+        ttk.Button(toolbar, text="fit", command=self.fit_ast_to_canvas).pack(side=tk.LEFT, padx=4, pady=6)
+        ttk.Button(toolbar, text="100%", command=lambda: self.set_ast_zoom(1.0)).pack(side=tk.LEFT, padx=4, pady=6)
+
+        self.ast_zoom_label = tk.Label(
+            toolbar,
+            text="缩放: 100%",
+            font=('Segoe UI', 10),
+            bg=self.colors['surface2'],
+            fg=self.colors['fg_dim']
+        )
+        self.ast_zoom_label.pack(side=tk.LEFT, padx=12)
         
         canvas_wrapper = tk.Frame(self.tree_frame, bg=self.colors['surface2'], bd=1, relief=tk.FLAT)
-        canvas_wrapper.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        canvas_wrapper.pack(fill=tk.BOTH, expand=True, padx=12, pady=(8, 12))
         
         self.tree_canvas = tk.Canvas(canvas_wrapper, bg=self.colors['bg_light'], highlightthickness=0)
         self.tree_canvas.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
@@ -588,7 +628,8 @@ class RustLexSyntaxVisualizer:
         scroll_x.pack(fill=tk.X, padx=12)
         self.tree_canvas.configure(xscrollcommand=scroll_x.set)
         
-        self.tree_canvas.bind('<Configure>', lambda event: self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox('all')))
+        self.tree_canvas.bind('<Configure>', self.on_ast_canvas_configure)
+        self.tree_canvas.bind('<Control-MouseWheel>', self.on_ast_mousewheel)
         
     def _ast_to_tree_data(self, node):
         if is_dataclass(node):
@@ -682,6 +723,89 @@ class RustLexSyntaxVisualizer:
             fill=self.colors['fg'],
             anchor='c')
 
+    def on_ast_canvas_configure(self, event=None):
+        self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox('all'))
+
+    def on_ast_mousewheel(self, event):
+        if event.delta > 0:
+            self.zoom_ast(1.15)
+        elif event.delta < 0:
+            self.zoom_ast(1 / 1.15)
+        return "break"
+
+    def get_ast_source_size(self):
+        if self.ast_source_image is not None:
+            return self.ast_source_image.size
+        if self.ast_photo_image is not None:
+            return self.ast_photo_image.width(), self.ast_photo_image.height()
+        return 1, 1
+
+    def calculate_ast_fit_zoom(self):
+        self.tree_canvas.update_idletasks()
+        source_width, source_height = self.get_ast_source_size()
+        canvas_width = max(1, self.tree_canvas.winfo_width() - 40)
+        canvas_height = max(1, self.tree_canvas.winfo_height() - 40)
+        fit_zoom = min(canvas_width / source_width, canvas_height / source_height)
+        return min(1.0, max(0.05, fit_zoom))
+
+    def fit_ast_to_canvas(self):
+        if not self.ast_image_bytes:
+            return
+        self.ast_fit_zoom = self.calculate_ast_fit_zoom()
+        self.set_ast_zoom(self.ast_fit_zoom)
+
+    def zoom_ast(self, factor):
+        if not self.ast_image_bytes:
+            return
+        self.set_ast_zoom(self.ast_zoom * factor)
+
+    def set_ast_zoom(self, zoom):
+        if not self.ast_image_bytes:
+            return
+        self.ast_zoom = max(0.05, min(6.0, zoom))
+        self.render_ast_image()
+
+    def load_ast_image(self, image_bytes):
+        self.ast_image_bytes = image_bytes
+        self.ast_source_image = None
+        if Image is not None:
+            self.ast_source_image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        else:
+            image_data = base64.b64encode(image_bytes).decode('ascii')
+            self.ast_photo_image = tk.PhotoImage(data=image_data)
+        self.fit_ast_to_canvas()
+
+    def render_ast_image(self):
+        self.tree_canvas.delete('all')
+        if not self.ast_image_bytes:
+            return
+
+        if self.ast_source_image is not None and ImageTk is not None:
+            source_width, source_height = self.ast_source_image.size
+            width = max(1, int(source_width * self.ast_zoom))
+            height = max(1, int(source_height * self.ast_zoom))
+            resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
+            resized = self.ast_source_image.resize((width, height), resample)
+            self.ast_photo_image = ImageTk.PhotoImage(resized)
+        else:
+            image_data = base64.b64encode(self.ast_image_bytes).decode('ascii')
+            original = tk.PhotoImage(data=image_data)
+            if self.ast_zoom >= 1:
+                factor = max(1, round(self.ast_zoom))
+                self.ast_photo_image = original.zoom(factor, factor)
+                self.ast_zoom = float(factor)
+            else:
+                factor = max(1, int((1 / self.ast_zoom) + 0.9999))
+                self.ast_photo_image = original.subsample(factor, factor)
+                self.ast_zoom = 1 / factor
+
+        self.tree_canvas.create_image(20, 20, image=self.ast_photo_image, anchor='nw')
+        self.tree_canvas.configure(
+            scrollregion=(0, 0, self.ast_photo_image.width() + 40, self.ast_photo_image.height() + 40)
+        )
+        if hasattr(self, 'ast_zoom_label'):
+            self.ast_zoom_label.config(text=f"缩放: {int(self.ast_zoom * 100)}%")
+
     def update_lex_tree(self):
         """更新词法分析结果视图"""
         self.lex_tree.delete(*self.lex_tree.get_children())
@@ -718,8 +842,11 @@ class RustLexSyntaxVisualizer:
             self.apply_rust_syntax_highlight()
 
     def update_ast_tree(self):
-        """使用解析到的 AST 更新语法树视图"""
+        """使用 ast_drawer.py 生成的 AST 图片更新语法树视图"""
         self.tree_canvas.delete('all')
+        self.ast_image_bytes = None
+        self.ast_source_image = None
+        self.ast_photo_image = None
 
         if self.ast is None:
             self.tree_canvas.create_text(
@@ -731,10 +858,21 @@ class RustLexSyntaxVisualizer:
             self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox('all'))
             return
 
-        tree_data = self._ast_to_tree_data(self.ast)
-        self._prepare_ast_layout(tree_data)
-        self._assign_ast_positions(tree_data, 20, 40)
-        self._draw_ast_tree(tree_data)
+        drawer = ASTGraphvizDrawer()
+        drawer.visit(self.ast)
+        image_bytes = drawer.render_to_memory(str(Path(__file__).parent))
+
+        if image_bytes:
+            self.load_ast_image(image_bytes)
+            return
+
+        fallback = drawer.graph.source
+        self.tree_canvas.create_text(
+            20, 20,
+            text=f"Graphviz 渲染失败，以下是 AST DOT 源码:\n\n{fallback}",
+            anchor='nw',
+            fill=self.colors['fg'],
+            font=('Consolas', 10))
         self.tree_canvas.configure(scrollregion=self.tree_canvas.bbox('all'))
 
     def run_analysis(self):
@@ -746,10 +884,12 @@ class RustLexSyntaxVisualizer:
         self.lexer_errors = lexer.get_errors()
         self.parse_error = None
         self.ast = None
+        self.ast_text = ""
 
         try:
             parser = Parser(self.current_tokens)
             self.ast = parser.parse_program()
+            self.ast_text = ASTPrinter().print_node(self.ast)
         except ParseError as exc:
             self.parse_error = exc
 
@@ -914,19 +1054,5 @@ class RustLexSyntaxVisualizer:
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("🦀 类Rust语言词法语法分析器 - 可视化演示")
-    print("=" * 60)
-    print("特性:")
-    print("  • struct结构体定义")
-    print("  • impl实现块")
-    print("  • 模式匹配 (match)")
-    print("  • 宏调用 (println!等)")
-    print("  • Option枚举类型")
-    print("  • 所有权语义支持")
-    print("")
-    print("启动图形界面...")
-    print("")
-    
     app = RustLexSyntaxVisualizer()
     app.run()
