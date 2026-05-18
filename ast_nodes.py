@@ -27,7 +27,20 @@ class Expression(Node):
 @dataclass
 class LetStatement(Statement):
     name: str
+    mutable: bool = False
+    type_name: str | None = None
     value: Expression | None = None
+
+
+@dataclass
+class AssignmentStatement(Statement):
+    target: "LValue"
+    value: Expression
+
+
+@dataclass
+class EmptyStatement(Statement):
+    pass
 
 
 @dataclass
@@ -46,7 +59,8 @@ class WhileStatement(Statement):
 @dataclass
 class FunctionDeclaration(Statement):
     name: str
-    parameters: list[str] = field(default_factory=list)
+    parameters: list["Parameter"] = field(default_factory=list)
+    return_type: str | None = None
     body: list[Statement] = field(default_factory=list)
 
 
@@ -66,6 +80,11 @@ class Identifier(Expression):
 
 
 @dataclass
+class LValue(Expression):
+    name: str
+
+
+@dataclass
 class Literal(Expression):
     value: Any
 
@@ -78,6 +97,19 @@ class BinaryExpression(Expression):
 
 
 @dataclass
+class UnaryExpression(Expression):
+    operator: str
+    operand: Expression
+
+
+@dataclass
 class CallExpression(Expression):
     callee: Expression
     arguments: list[Expression] = field(default_factory=list)
+
+
+@dataclass
+class Parameter(Node):
+    name: str
+    mutable: bool = False
+    type_name: str | None = None
