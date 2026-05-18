@@ -323,22 +323,6 @@ class RustLexSyntaxVisualizer:
             self.code_text.insert(1.0, "// 未找到 tests 目录中的示例文件")
             self.apply_rust_syntax_highlight()
         
-        # 统计信息栏
-        stats_frame = tk.Frame(left_frame, bg=self.colors['surface2'], height=36)
-        stats_frame.pack(fill=tk.X, pady=(4, 0))
-        stats_frame.pack_propagate(False)
-        
-        current_source = self.code_text.get(1.0, tk.END).rstrip('\n')
-        lines = len(current_source.split('\n')) if current_source else 0
-        chars = len(current_source)
-        
-        stats_text = f"📊 {lines} 行  |  {chars} 字符  "
-        stats_label = tk.Label(
-            stats_frame, text=stats_text,
-            font=('Segoe UI', 10),
-            bg=self.colors['surface2'], fg=self.colors['accent']
-        )
-        stats_label.pack(padx=16, pady=8, anchor='w')
 
     def apply_rust_syntax_highlight(self):
         """应用Rust语法高亮 - 浅色版"""
@@ -581,14 +565,6 @@ class RustLexSyntaxVisualizer:
             selectforeground=self.colors['accent']
         )
         self.report_text.pack(fill=tk.BOTH, expand=True)
-        
-        scroll_y = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=self.report_text.yview, style='Vertical.TScrollbar')
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4))
-        self.report_text.config(yscrollcommand=scroll_y.set)
-        
-        self.report_text.tag_config("success", foreground=self.colors['success'])
-        self.report_text.tag_config("warning", foreground=self.colors['warning'])
-        self.report_text.tag_config("accent", foreground=self.colors['accent'])
         
     def update_syntax_report(self):
         """生成语法分析报告 - 动态内容"""
