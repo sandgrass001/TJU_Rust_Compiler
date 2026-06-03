@@ -27,6 +27,18 @@ class ParseError(CompilerError):
     pass
 
 
+class SemanticError(CompilerError):
+    pass
+
+
+class TypeError(SemanticError):
+    pass
+
+
+class BorrowError(SemanticError):
+    pass
+
+
 class ErrorReporter:
     def report(self, error: CompilerError) -> None:
         print(f"错误: {error}")

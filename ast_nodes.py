@@ -113,3 +113,25 @@ class Parameter(Node):
     name: str
     mutable: bool = False
     type_name: str | None = None
+
+
+@dataclass
+class IndexExpression(Expression):
+    collection: Expression
+    index: Expression
+
+@dataclass
+class TupleAccessExpression(Expression):
+    collection: Expression
+    index: int
+
+
+@dataclass
+class IndexExpression(Expression):
+    collection: Expression
+    index: Expression
+
+@dataclass
+class TupleAccessExpression(Expression):
+    collection: Expression
+    index: int
