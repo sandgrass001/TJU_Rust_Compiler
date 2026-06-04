@@ -18,7 +18,10 @@ from ast_drawer import ASTGraphvizDrawer
 from ast_printer import ASTPrinter
 from lexer.lexer import Lexer
 from lexer.token import TokenType as LexerTokenType
-from error import ParseError
+from error import ParseError, CompilerError, ErrorReporter
+from semantic import SemanticAnalyzer
+from symbol_table.symbol_table import SymbolTable
+from ir_generator import IRGenerator
 
 try:
     from PIL import Image, ImageTk
@@ -138,6 +141,8 @@ class RustLexSyntaxVisualizer:
         self.ast_fit_zoom = 1.0
         self.ast_auto_fit = True
         self.ast_fit_after_id = None
+        self.semantic_error = None
+        self.ir_text = ""
 
         self.AST_NODE_X_GAP = 24
         self.AST_NODE_Y_GAP = 100
@@ -499,6 +504,7 @@ class RustLexSyntaxVisualizer:
         
         self.create_lex_tab()
         self.create_syntax_tab()
+        self.create_codegen_tab()
         self.create_tree_tab()
             
     def create_lex_tab(self):
@@ -596,32 +602,72 @@ class RustLexSyntaxVisualizer:
         else:
             report.append("✅ 语法分析成功! 当前输入符合可解析子集语法。")
             report.append("")
-            report.append("📋 语法结构摘要:")
-            report.append("─" * 60)
-            if self.ast is not None:
-                if self.ast_text:
-                    report.append("")
-                    report.append("AST 文本结构:")
-                    report.append("-" * 60)
-                    report.append(self.ast_text.rstrip())
-                    report.append("")
-                report.append(f"  ✓ 程序包含 {len(self.ast.body)} 条顶层声明")
-                for node in self.ast.body:
-                    report.append(f"  ✓ 声明类型: {node.__class__.__name__}")
-            report.append("")
-            report.append("📌 支持语法特性:")
-            report.append("  • 函数声明: fn name(...) -> type")
-            report.append("  • let 绑定与可变变量")
-            report.append("  • if 条件语句")
-            report.append("  • return 语句")
-            report.append("  • 赋值语句与表达式语句")
-            report.append("  • 二元运算与函数调用")
-            report.append("")
+            if self.semantic_error:
+                report.append("❌ 语义检查失败:")
+                report.append(f"  {self.semantic_error}")
+                report.append("")
+                report.append("请修复语义错误后重新运行分析。")
+            else:
+                report.append("✅ 语义检查通过! 当前程序满足类型与借用规则。")
+                report.append("")
+                report.append("📋 语法结构摘要:")
+                report.append("─" * 60)
+                if self.ast is not None:
+                    if self.ast_text:
+                        report.append("")
+                        report.append("AST 文本结构:")
+                        report.append("-" * 60)
+                        report.append(self.ast_text.rstrip())
+                        report.append("")
+                    report.append(f"  ✓ 程序包含 {len(self.ast.body)} 条顶层声明")
+                    for node in self.ast.body:
+                        report.append(f"  ✓ 声明类型: {node.__class__.__name__}")
+                report.append("")
+                report.append("📌 支持语法特性:")
+                report.append("  • 函数声明: fn name(...) -> type")
+                report.append("  • let 绑定与可变变量")
+                report.append("  • if 条件语句")
+                report.append("  • return 语句")
+                report.append("  • 赋值语句与表达式语句")
+                report.append("  • 二元运算与函数调用")
+                report.append("")
+                if self.ir_text:
+                    report.append("✅ 中间代码生成成功，可在“中间代码”标签页查看输出。\n")
 
         report.append("═" * 80)
         self.report_text.insert(1.0, '\n'.join(report))
         self.report_text.config(state=tk.DISABLED)
         
+    def create_codegen_tab(self):
+        """创建中间代码标签页 - 浅色版"""
+        self.codegen_frame = tk.Frame(self.notebook, bg=self.colors['bg'])
+        self.notebook.add(self.codegen_frame, text="⚙️ 中间代码")
+
+        result_frame = tk.Frame(self.codegen_frame, bg=self.colors['surface2'], bd=1, relief=tk.FLAT)
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        self.codegen_text = tk.Text(
+            result_frame, font=('Consolas', 11),
+            bg=self.colors['bg_light'], fg=self.colors['fg'],
+            wrap=tk.NONE, padx=16, pady=16,
+            bd=0, relief=tk.FLAT, highlightthickness=0,
+            selectbackground=self.colors['accent_light'],
+            selectforeground=self.colors['accent']
+        )
+        self.codegen_text.pack(fill=tk.BOTH, expand=True)
+        self.codegen_text.config(state=tk.DISABLED)
+
+    def update_codegen_view(self):
+        self.codegen_text.config(state=tk.NORMAL)
+        self.codegen_text.delete(1.0, tk.END)
+        if self.ir_text:
+            self.codegen_text.insert(1.0, self.ir_text.rstrip())
+        elif self.semantic_error:
+            self.codegen_text.insert(1.0, "无法生成中间代码：语义分析失败。请修复语义错误后重新运行。")
+        else:
+            self.codegen_text.insert(1.0, "中间代码尚未生成。请先运行分析并确保语法与语义检查通过。")
+        self.codegen_text.config(state=tk.DISABLED)
+
     def create_tree_tab(self):
         """创建语法树标签页 - 浅色版"""
         self.tree_frame = tk.Frame(self.notebook, bg=self.colors['bg'])
@@ -999,6 +1045,8 @@ class RustLexSyntaxVisualizer:
         self.parse_error = None
         self.ast = None
         self.ast_text = ""
+        self.semantic_error = None
+        self.ir_text = ""
 
         try:
             parser = Parser(self.current_tokens)
@@ -1007,8 +1055,19 @@ class RustLexSyntaxVisualizer:
         except ParseError as exc:
             self.parse_error = exc
 
+        if self.ast is not None and not self.parse_error and not self.lexer_errors:
+            symbol_table = SymbolTable()
+            analyzer = SemanticAnalyzer(symbol_table, ErrorReporter())
+            try:
+                analyzer.analyze(self.ast)
+                generator = IRGenerator()
+                self.ir_text = generator.generate(self.ast)
+            except CompilerError as exc:
+                self.semantic_error = str(exc)
+
         self.update_lex_tree()
         self.update_syntax_report()
+        self.update_codegen_view()
         self.update_ast_tree()
         self.code_text.config(state=tk.NORMAL)
 
