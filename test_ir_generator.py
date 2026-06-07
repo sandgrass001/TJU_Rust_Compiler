@@ -51,3 +51,49 @@ def test_ir_generator_control_flow():
     assert '(label, L0, _, _)' in ir
     assert '(ifz, t0, _, L1)' in ir or '(ifz, t0, _, L0)' in ir
     assert '(goto, L0, _, _)' in ir or '(goto, L1, _, _)' in ir
+
+
+def test_ir_generator_else_if_and_loop_control():
+    source = '''
+    fn main() {
+        let mut x: i32 = 5;
+        if x < 0 {
+            x = 0;
+        } else if x < 10 {
+            x = 10;
+        } else {
+            x = 20;
+        }
+        loop {
+            break;
+        }
+    }
+    '''
+    tokens = tokenize(source)
+    ast = Parser(tokens).parse_program()
+    ir = IRGenerator().generate(ast)
+
+    assert '(ifz, t0, _, L' in ir
+    assert '(goto, L' in ir
+    assert '(label, L' in ir
+
+
+def test_ir_generator_for_break_continue():
+    source = '''
+    fn main() {
+        for i in 0..3 {
+            if i == 1 {
+                continue;
+            }
+            if i == 2 {
+                break;
+            }
+        }
+    }
+    '''
+    tokens = tokenize(source)
+    ast = Parser(tokens).parse_program()
+    ir = IRGenerator().generate(ast)
+
+    assert '(assign, 0, _, i)' in ir
+    assert '(goto, L' in ir

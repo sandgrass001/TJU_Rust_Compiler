@@ -4,18 +4,23 @@ from ast_nodes import (
     AssignmentStatement,
     BinaryExpression,
     CallExpression,
+    ContinueStatement,
     ExpressionStatement,
+    ForStatement,
     FunctionDeclaration,
     Identifier,
     IfStatement,
     LetStatement,
     Literal,
     LValue,
+    LoopStatement,
     Node,
     Program,
+    RangeExpression,
     ReturnStatement,
     UnaryExpression,
     WhileStatement,
+    BreakStatement,
 )
 
 
@@ -27,6 +32,7 @@ class IRGenerator:
         self.temp_count = 0
         self.label_count = 0
         self.current_function: str | None = None
+        self.loop_stack: list[dict[str, str]] = []
 
     def new_temp(self) -> str:
         name = f"t{self.temp_count}"
@@ -123,11 +129,86 @@ class IRGenerator:
         cond = self.visit(node.condition)
         self.emit("ifz", cond, "", end_label)
 
+        self.loop_stack.append({"continue": start_label, "break": end_label})
         for stmt in node.body:
             self.visit(stmt)
+        self.loop_stack.pop()
 
         self.emit("goto", start_label)
         self.emit("label", end_label)
+
+    def visit_ForStatement(self, node: ForStatement) -> None:
+        if isinstance(node.iterable, RangeExpression):
+            start = self.visit(node.iterable.start)
+            end = self.visit(node.iterable.end)
+            self.emit("assign", start, "", node.iterator)
+            begin_label = self.new_label("L")
+            continue_label = self.new_label("L")
+            end_label = self.new_label("L")
+            self.emit("label", begin_label)
+            cond = self.new_temp()
+            self.emit("<", node.iterator, end, cond)
+            self.emit("ifz", cond, "", end_label)
+
+            self.loop_stack.append({"continue": continue_label, "break": end_label})
+            for stmt in node.body:
+                self.visit(stmt)
+            self.loop_stack.pop()
+
+            self.emit("label", continue_label)
+            next_val = self.new_temp()
+            self.emit("+", node.iterator, "1", next_val)
+            self.emit("assign", next_val, "", node.iterator)
+            self.emit("goto", begin_label)
+            self.emit("label", end_label)
+        else:
+            iterable = self.visit(node.iterable)
+            start_label = self.new_label("L")
+            continue_label = self.new_label("L")
+            end_label = self.new_label("L")
+            self.emit("for", iterable, "", node.iterator)
+            self.emit("label", start_label)
+
+            self.loop_stack.append({"continue": continue_label, "break": end_label})
+            for stmt in node.body:
+                self.visit(stmt)
+            self.loop_stack.pop()
+
+            self.emit("label", continue_label)
+            self.emit("goto", start_label)
+            self.emit("label", end_label)
+
+    def visit_LoopStatement(self, node: LoopStatement) -> None:
+        start_label = self.new_label("L")
+        end_label = self.new_label("L")
+        self.emit("label", start_label)
+
+        self.loop_stack.append({"continue": start_label, "break": end_label})
+        for stmt in node.body:
+            self.visit(stmt)
+        self.loop_stack.pop()
+
+        self.emit("goto", start_label)
+        self.emit("label", end_label)
+
+    def visit_BreakStatement(self, node: BreakStatement) -> None:
+        if self.loop_stack:
+            self.emit("goto", self.loop_stack[-1]["break"], "", "")
+        else:
+            self.emit("break")
+
+    def visit_ContinueStatement(self, node: ContinueStatement) -> None:
+        if self.loop_stack:
+            self.emit("goto", self.loop_stack[-1]["continue"], "", "")
+        else:
+            self.emit("continue")
+
+    def visit_RangeExpression(self, node: RangeExpression) -> str:
+        start = self.visit(node.start)
+        end = self.visit(node.end)
+        temp = self.new_temp()
+        self.emit("range", start, end, temp)
+        return temp
 
     def visit_ReturnStatement(self, node: ReturnStatement) -> None:
         if node.value is None:

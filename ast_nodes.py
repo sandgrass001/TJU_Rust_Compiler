@@ -57,6 +57,34 @@ class WhileStatement(Statement):
 
 
 @dataclass
+class ForStatement(Statement):
+    iterator: str
+    iterable: Expression
+    body: list[Statement] = field(default_factory=list)
+
+
+@dataclass
+class LoopStatement(Statement):
+    body: list[Statement] = field(default_factory=list)
+
+
+@dataclass
+class BreakStatement(Statement):
+    pass
+
+
+@dataclass
+class ContinueStatement(Statement):
+    pass
+
+
+@dataclass
+class RangeExpression(Expression):
+    start: Expression
+    end: Expression
+
+
+@dataclass
 class FunctionDeclaration(Statement):
     name: str
     parameters: list["Parameter"] = field(default_factory=list)

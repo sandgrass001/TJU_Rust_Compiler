@@ -19,6 +19,7 @@ class SemanticAnalyzer:
         # Borrow = {"type": "immutable" | "mutable"}
         self.borrows = [{}]
         self.current_function_return_type = TYPE_UNIT
+        self.loop_depth = 0
         
     def _enter_scope(self):
         self.symbol_table.enter_scope()
@@ -123,11 +124,63 @@ class SemanticAnalyzer:
 
     def visit_WhileStatement(self, node: WhileStatement) -> Type:
         cond_type = self.analyze(node.condition)
+        self.loop_depth += 1
         self._enter_scope()
         for stmt in node.body:
             self.analyze(stmt)
         self._exit_scope()
+        self.loop_depth -= 1
         return TYPE_UNIT
+
+    def visit_ForStatement(self, node: 'ForStatement') -> Type:
+        iterable_type = self.analyze(node.iterable)
+        iterator_type = TYPE_UNKNOWN
+        if isinstance(node.iterable, RangeExpression):
+            if iterable_type == TYPE_I32:
+                iterator_type = TYPE_I32
+            else:
+                raise TypeError('for 循环范围表达式必须是 i32 类型')
+
+        self.loop_depth += 1
+        self._enter_scope()
+        self.symbol_table.declare_variable(
+            name=node.iterator,
+            var_type=iterator_type,
+            is_mutable=False,
+            is_initialized=True
+        )
+        self.borrows[-1][node.iterator] = []
+        for stmt in node.body:
+            self.analyze(stmt)
+        self._exit_scope()
+        self.loop_depth -= 1
+        return TYPE_UNIT
+
+    def visit_LoopStatement(self, node: 'LoopStatement') -> Type:
+        self.loop_depth += 1
+        self._enter_scope()
+        for stmt in node.body:
+            self.analyze(stmt)
+        self._exit_scope()
+        self.loop_depth -= 1
+        return TYPE_UNIT
+
+    def visit_BreakStatement(self, node: 'BreakStatement') -> Type:
+        if self.loop_depth == 0:
+            raise SemanticError('break 语句只能出现在循环体中')
+        return TYPE_UNIT
+
+    def visit_ContinueStatement(self, node: 'ContinueStatement') -> Type:
+        if self.loop_depth == 0:
+            raise SemanticError('continue 语句只能出现在循环体中')
+        return TYPE_UNIT
+
+    def visit_RangeExpression(self, node: 'RangeExpression') -> Type:
+        left_type = self.analyze(node.start)
+        right_type = self.analyze(node.end)
+        if left_type != TYPE_I32 or right_type != TYPE_I32:
+            raise TypeError('范围表达式的起始和结束必须是 i32')
+        return TYPE_I32
 
     def visit_FunctionDeclaration(self, node: FunctionDeclaration) -> None:
         # Build return type

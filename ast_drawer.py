@@ -79,8 +79,6 @@ def find_dot_executable():
 
 
 class ASTGraphvizDrawer:
-    """Draw the AST dataclasses defined in ast_nodes.py with Graphviz."""
-
     def __init__(self):
         graph_class = Digraph or SimpleDigraph
         self.graph = graph_class('AST', node_attr={'shape': 'box', 'fontname': 'monospace'})

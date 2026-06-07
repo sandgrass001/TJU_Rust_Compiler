@@ -5,18 +5,23 @@ from dataclasses import dataclass
 from ast_nodes import (
 	AssignmentStatement,
 	BinaryExpression,
+	BreakStatement,
 	CallExpression,
+	ContinueStatement,
 	EmptyStatement,
 	Expression,
 	ExpressionStatement,
+	ForStatement,
 	FunctionDeclaration,
 	Identifier,
 	IfStatement,
 	LetStatement,
 	Literal,
 	LValue,
+	LoopStatement,
 	Parameter,
 	Program,
+	RangeExpression,
 	ReturnStatement,
 	Statement,
 	UnaryExpression,
@@ -107,29 +112,29 @@ class Parser:
 			return self._if_statement()
 		if self._match(TokenType.WHILE):
 			return self._while_statement()
+		if self._match(TokenType.FOR):
+			return self._for_statement()
+		if self._match(TokenType.LOOP):
+			return self._loop_statement()
+		if self._match(TokenType.BREAK):
+			return self._break_statement()
+		if self._match(TokenType.CONTINUE):
+			return self._continue_statement()
 		if self._check(TokenType.IDENT) and self._check_next(TokenType.ASSIGN):
 			return self._assignment_statement()
 		return self._expression_statement()
 
 	def _let_statement(self) -> LetStatement:
 		is_mut = self._match(TokenType.MUT)
-		ident = self._consume(TokenType.IDENT, "let 声明缺少变量名")
-
+		name = self._consume(TokenType.IDENT, "let 语句缺少标识符").literal
 		type_name = None
+		value = None
 		if self._match(TokenType.COLON):
 			type_name = self._parse_type()
-
-		value = None
 		if self._match(TokenType.ASSIGN):
 			value = self._expression()
-
 		self._consume(TokenType.SEMICOLON, "let 语句缺少 ';'")
-		return LetStatement(
-			name=ident.literal,
-			mutable=is_mut,
-			type_name=type_name,
-			value=value,
-		)
+		return LetStatement(name=name, mutable=is_mut, type_name=type_name, value=value)
 
 	def _assignment_statement(self) -> AssignmentStatement:
 		name = self._consume(TokenType.IDENT, "赋值语句左侧需要变量")
@@ -151,13 +156,30 @@ class Parser:
 		then_branch = self._block()
 		else_branch: list[Statement] = []
 		if self._match(TokenType.ELSE):
-			else_branch = self._block()
+			if self._match(TokenType.IF):
+				else_branch = [self._if_statement()]
+			else:
+				else_branch = self._block()
 		return IfStatement(condition=condition, then_branch=then_branch, else_branch=else_branch)
 
-	def _while_statement(self) -> WhileStatement:
-		condition = self._expression()
+	def _for_statement(self) -> ForStatement:
+		iterator = self._consume(TokenType.IDENT, "for 循环缺少迭代变量").literal
+		self._consume(TokenType.IN, "for 循环缺少 in")
+		iterable = self._expression()
 		body = self._block()
-		return WhileStatement(condition=condition, body=body)
+		return ForStatement(iterator=iterator, iterable=iterable, body=body)
+
+	def _loop_statement(self) -> LoopStatement:
+		body = self._block()
+		return LoopStatement(body=body)
+
+	def _break_statement(self) -> BreakStatement:
+		self._consume(TokenType.SEMICOLON, "break 语句缺少 ';'")
+		return BreakStatement()
+
+	def _continue_statement(self) -> ContinueStatement:
+		self._consume(TokenType.SEMICOLON, "continue 语句缺少 ';'")
+		return ContinueStatement()
 
 	def _expression_statement(self) -> ExpressionStatement:
 		expr = self._expression()
@@ -169,7 +191,14 @@ class Parser:
 		return ExpressionStatement(expression=expr)
 
 	def _expression(self) -> Expression:
-		return self._comparison()
+		return self._range()
+
+	def _range(self) -> Expression:
+		expr = self._comparison()
+		if self._match(TokenType.DOTDOT):
+			right = self._comparison()
+			return RangeExpression(start=expr, end=right)
+		return expr
 
 	def _comparison(self) -> Expression:
 		expr = self._additive()
