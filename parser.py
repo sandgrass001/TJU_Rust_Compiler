@@ -162,6 +162,11 @@ class Parser:
 				else_branch = self._block()
 		return IfStatement(condition=condition, then_branch=then_branch, else_branch=else_branch)
 
+	def _while_statement(self) -> WhileStatement:
+		condition = self._expression()
+		body = self._block()
+		return WhileStatement(condition=condition, body=body)
+
 	def _for_statement(self) -> ForStatement:
 		iterator = self._consume(TokenType.IDENT, "for 循环缺少迭代变量").literal
 		self._consume(TokenType.IN, "for 循环缺少 in")
